@@ -96,19 +96,22 @@ def init_db():
 
 
 def get_db():
-    """获取数据库连接"""
+    """获取数据库连接（线程安全）"""
     if not hasattr(threading.local(), 'db'):
         # 确保数据库文件存在
         db_path = app.config['DATABASE']
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
         # 创建新连接
-        threading.local().db = sqlite3.connect(db_path)
-        threading.local().db.row_factory = sqlite3.Row
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row  # 先设置属性再赋值
+
+        # 存储到线程本地存储
+        threading.local().db = conn
 
         # 初始化表结构
-        with threading.local().db:
-            threading.local().db.execute("""
+        with conn:
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS migration_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     start_time TIMESTAMP,
