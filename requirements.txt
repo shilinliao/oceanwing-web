@@ -1,0 +1,9 @@
+# requirements.txt
+Flask==2.3.3
+clickhouse-connect==0.7.3
+pymysql==1.1.0
+schedule==1.2.0
+pytz==2023.3
+psutil==5.9.6
+Werkzeug==2.3.7
+gunicorn==21.2.0
