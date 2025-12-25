@@ -385,7 +385,7 @@ class DataMigrationApp:
 
         # ods_query
         tc = {}
-        for i in range(len(self.ods_query):
+        for i in range(len(self.ods_query)):
             tc[self.ods_query[i]] = self.tods_query[i]
         self.TABLE_COLUMNS["ods_query"] = tc
 
