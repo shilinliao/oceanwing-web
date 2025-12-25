@@ -98,8 +98,28 @@ def init_db():
 def get_db():
     """获取数据库连接"""
     if not hasattr(threading.local(), 'db'):
-        threading.local().db = sqlite3.connect(app.config['DATABASE'])
+        # 确保数据库文件存在
+        db_path = app.config['DATABASE']
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+
+        # 创建新连接
+        threading.local().db = sqlite3.connect(db_path)
         threading.local().db.row_factory = sqlite3.Row
+
+        # 初始化表结构
+        with threading.local().db:
+            threading.local().db.execute("""
+                CREATE TABLE IF NOT EXISTS migration_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    start_time TIMESTAMP,
+                    end_time TIMESTAMP,
+                    status TEXT,
+                    tables_migrated TEXT,
+                    total_records INTEGER,
+                    error_message TEXT,
+                    duration_seconds REAL
+                )
+            """)
     return threading.local().db
 
 
