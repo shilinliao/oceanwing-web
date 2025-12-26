@@ -1,3 +1,6 @@
 # 经过测试的 Python 3.13 兼容版本
 streamlit>=1.28.0
 pandas>=2.2.0
+numpy
+pymysql
+clickhouse-connect
