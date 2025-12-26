@@ -1,67 +1,88 @@
-"""ClickHouse客户端管理"""
-import logging
+"""ClickHouse客户端"""
 import clickhouse_connect
-from typing import List, Any, Dict
-from threading import Lock
-
-from core.models import ColumnDefinition
+import logging
+from typing import List, Dict, Any, Optional
 from config.settings import Config
 
-logger = logging.getLogger('DataMigrationApp')
+logger = logging.getLogger(__name__)
 
-
-class ClickHouseClientManager:
-    """ClickHouse客户端管理器"""
+class ClickHouseClient:
+    """ClickHouse客户端"""
 
     def __init__(self):
-        self.clients = {}
-        self.lock = Lock()
         self.config = Config.CLICKHOUSE_CONFIG
+        self.client = None
 
-    def get_client(self, thread_id: int, table_index: int = 0):
-        """获取ClickHouse客户端"""
-        key = f"{thread_id}_{table_index}"
-        with self.lock:
-            if key not in self.clients:
-                logger.info(f"Creating ClickHouse connection for thread {thread_id}, table {table_index}")
-                try:
-                    self.clients[key] = clickhouse_connect.get_client(**self.config)
-                except Exception as e:
-                    logger.error(f"Failed to create ClickHouse client: {str(e)}")
-                    raise
-            return self.clients[key]
-
-    def close_all(self):
-        """关闭所有连接"""
-        with self.lock:
-            for key, client in self.clients.items():
-                try:
-                    client.close()
-                except Exception as e:
-                    logger.warning(f"Error closing ClickHouse client {key}: {str(e)}")
-            self.clients.clear()
-
-    def get_table_schema(self, thread_id: int, table_name: str, table_index: int = 0) -> List[ColumnDefinition]:
-        """获取表结构"""
-        columns = []
+    def connect(self):
+        """连接数据库"""
         try:
-            client = self.get_client(thread_id, table_index)
-            query = f"DESCRIBE TABLE {table_name}"
-            result = client.query(query)
-
-            for row in result.result_rows:
-                name = row[0]
-                data_type = row[1]
-                columns.append(ColumnDefinition(name, data_type))
-
-            logger.info(f"Retrieved schema for {table_name}: {len(columns)} columns")
-            return columns
-
+            self.client = clickhouse_connect.get_client(**self.config)
+            logger.info("ClickHouse连接成功")
+            return True
         except Exception as e:
-            logger.error(f"Error getting table schema for {table_name}: {str(e)}")
-            raise
+            logger.error(f"ClickHouse连接失败: {str(e)}")
+            return False
 
-    def execute_query(self, thread_id: int, query: str, table_index: int = 0):
+    def disconnect(self):
+        """断开连接"""
+        if self.client:
+            try:
+                self.client.close()
+                logger.info("ClickHouse连接已关闭")
+            except Exception as e:
+                logger.error(f"关闭ClickHouse连接失败: {str(e)}")
+
+    def execute_query(self, query: str, params: Dict = None) -> Optional[Any]:
         """执行查询"""
-        client = self.get_client(thread_id, table_index)
-        return client.query(query)
+        try:
+            if not self.client:
+                self.connect()
+
+            result = self.client.query(query, parameters=params)
+            return result
+        except Exception as e:
+            logger.error(f"ClickHouse查询失败: {str(e)}")
+            return None
+
+    def get_table_schema(self, table_name: str) -> List[Dict]:
+        """获取表结构"""
+        query = f"DESCRIBE TABLE {table_name}"
+        result = self.execute_query(query)
+
+        if result and hasattr(result, 'result_rows'):
+            schema = []
+            for row in result.result_rows:
+                schema.append({
+                    'name': row[0],
+                    'type': row[1],
+                    'default_type': row[2],
+                    'default_expression': row[3],
+                    'comment': row[4],
+                    'codec_expression': row[5],
+                    'ttl_expression': row[6]
+                })
+            return schema
+        return []
+
+    def get_table_row_count(self, table_name: str, date_field: str,
+                           start_date: str, end_date: str) -> int:
+        """获取表记录数"""
+        query = f"""
+        SELECT COUNT(*) 
+        FROM {table_name} 
+        WHERE {date_field} >= '{start_date}' 
+        AND {date_field} < '{end_date}'
+        """
+
+        result = self.execute_query(query)
+        if result and hasattr(result, 'result_rows'):
+            return result.result_rows[0][0] if result.result_rows else 0
+        return 0
+
+    def test_connection(self) -> bool:
+        """测试连接"""
+        try:
+            result = self.execute_query("SELECT 1")
+            return result is not None
+        except Exception:
+            return False

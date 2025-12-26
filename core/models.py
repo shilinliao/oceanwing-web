@@ -1,65 +1,70 @@
-"""数据模型定义"""
+"""数据模型"""
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Dict, Any, Optional
 from datetime import datetime
+from enum import Enum
 
-@dataclass(order=True)
+@dataclass
 class MigrationTask:
-    """迁移任务数据类"""
-    priority: int = field(compare=True)
-    task_id: int = field(compare=False)
-    source_table: str = field(compare=False)
-    target_table: str = field(compare=False)
-    day: int = field(compare=False)
-    date_str: str = field(compare=False)
-    columns: List['ColumnDefinition'] = field(compare=False)
-    table_index: int = field(compare=False)
-
-    def __init__(self, source_table: str, target_table: str, day: int, date_str: str,
-                 columns: List['ColumnDefinition'], task_id: int, priority: int = 0, table_index: int = 0):
-        self.priority = priority
-        self.task_id = task_id
-        self.source_table = source_table
-        self.target_table = target_table
-        self.day = day
-        self.date_str = date_str
-        self.columns = columns
-        self.table_index = table_index
-
-    def __repr__(self):
-        return f"MigrationTask(id={self.task_id}, priority={self.priority}, date={self.date_str}, table={self.target_table})"
-
-
-class ColumnDefinition:
-    """列定义类"""
-    def __init__(self, name: str, data_type: str):
-        self.name = name
-        self.type = data_type
-
-    def get_name(self) -> str:
-        return self.name
-
-    def get_type(self) -> str:
-        return self.type
-
-    def __repr__(self):
-        return f"ColumnDefinition(name={self.name}, type={self.type})"
-
+    """迁移任务"""
+    source_table: str
+    target_table: str
+    date_str: str
+    day_offset: int
+    priority: int = 0
+    task_id: str = ""
+    status: str = "pending"
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    records_processed: int = 0
+    error_message: str = ""
 
 @dataclass
 class MigrationResult:
-    """迁移结果类"""
+    """迁移结果"""
     success: bool
     table_name: str
     records_migrated: int
     start_time: datetime
     end_time: datetime
     error_message: Optional[str] = None
+    execution_time: float = 0.0
+
+    def __post_init__(self):
+        if self.end_time and self.start_time:
+            self.execution_time = (self.end_time - self.start_time).total_seconds()
+
+@dataclass
+class MigrationStats:
+    """迁移统计"""
+    total_tables: int = 0
+    completed_tables: int = 0
+    failed_tables: int = 0
+    total_records: int = 0
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    execution_time: float = 0.0
 
     @property
-    def duration(self) -> float:
-        return (self.end_time - self.start_time).total_seconds()
+    def progress_percentage(self) -> float:
+        if self.total_tables == 0:
+            return 0.0
+        return (self.completed_tables + self.failed_tables) / self.total_tables * 100
 
-    def __repr__(self):
-        status = "SUCCESS" if self.success else "FAILED"
-        return f"MigrationResult({status}, {self.table_name}, records={self.records_migrated}, duration={self.duration:.2f}s)"
+    @property
+    def success_rate(self) -> float:
+        if self.total_tables == 0:
+            return 0.0
+        return self.completed_tables / self.total_tables * 100
+
+@dataclass
+class TableInfo:
+    """表信息"""
+    name: str
+    source_name: str
+    description: str
+    migration_days: int
+    status: str = "not_started"
+    last_migration: Optional[datetime] = None
+    records_migrated: int = 0
+    avg_migration_time: float = 0.0

@@ -5,11 +5,13 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import time
+import threading
+import json
 import sys
 import os
 
 # 添加项目路径
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core.migration_app import DataMigrationApp
 from config.settings import Config
@@ -23,47 +25,18 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# 初始化session state
+# 初始化日志
+setup_logging()
+
+# 初始化应用状态
 if 'migration_app' not in st.session_state:
-    st.session_state.migration_app = None
-if 'migration_status' not in st.session_state:
-    st.session_state.migration_status = {}
+    st.session_state.migration_app = DataMigrationApp()
 if 'last_update' not in st.session_state:
     st.session_state.last_update = datetime.now()
-
-class StreamlitMigrationManager:
-    """Streamlit迁移管理器"""
-
-    def __init__(self):
-        self.setup_logging()
-        self.setup_app()
-
-    def setup_logging(self):
-        """设置日志"""
-        setup_logging("INFO", "streamlit_migration.log")
-
-    def setup_app(self):
-        """初始化应用"""
-        if st.session_state.migration_app is None:
-            try:
-                st.session_state.migration_app = DataMigrationApp(
-                    max_workers_per_table=4,
-                    schedule_enabled=False  # Streamlit模式下不启用调度
-                )
-                st.success("✅ 迁移应用初始化成功")
-            except Exception as e:
-                st.error(f"❌ 应用初始化失败: {str(e)}")
-
-    def get_migration_status(self):
-        """获取迁移状态"""
-        if st.session_state.migration_app:
-            return st.session_state.migration_app.get_status()
-        return {}
-
-    def update_status(self):
-        """更新状态"""
-        st.session_state.migration_status = self.get_migration_status()
-        st.session_state.last_update = datetime.now()
+if 'migration_history' not in st.session_state:
+    st.session_state.migration_history = []
+if 'auto_refresh' not in st.session_state:
+    st.session_state.auto_refresh = True
 
 def main():
     """主页面"""
@@ -71,248 +44,199 @@ def main():
     st.title("🚀 数据迁移管理系统")
     st.markdown("""
     **ClickHouse到MySQL数据迁移管理平台**
-    - 实时监控迁移状态
-    - 手动控制迁移任务
-    - 查看迁移统计和性能指标
+    - 📊 实时监控迁移状态
+    - 🎮 手动控制迁移任务
+    - 📈 查看迁移统计和性能指标
+    - ⚙️ 灵活配置迁移参数
     """)
-
-    # 初始化管理器
-    manager = StreamlitMigrationManager()
 
     # 侧边栏
     with st.sidebar:
-        st.header("控制面板")
-
-        # 系统信息
-        st.subheader("📊 系统信息")
-        if st.session_state.migration_app:
-            status = st.session_state.migration_app.get_status()
-            st.metric("运行状态", "🟢 运行中" if not status.get('shutdown_requested', False) else "🔴 已停止")
-            st.metric("迁移任务", "🟡 进行中" if status.get('is_running', False) else "🟢 空闲")
-        else:
-            st.metric("运行状态", "🔴 未初始化")
-
-        # 控制按钮
-        st.subheader("🎮 迁移控制")
-        col1, col2 = st.columns(2)
-
-        with col1:
-            if st.button("▶️ 开始迁移", use_container_width=True):
-                start_migration(manager)
-
-        with col2:
-            if st.button("⏹️ 停止迁移", use_container_width=True):
-                stop_migration(manager)
-
-        # 单表迁移选项
-        st.subheader("📋 单表迁移")
-        selected_table = st.selectbox(
-            "选择要迁移的表",
-            Config.TARGET_TABLES,
-            index=0
-        )
-
-        migration_days = st.slider("迁移天数", 1, 90, 30)
-
-        if st.button("🔧 迁移选中表", use_container_width=True):
-            migrate_single_table(manager, selected_table, migration_days)
-
-        # 配置设置
-        st.subheader("⚙️ 系统配置")
-        workers_per_table = st.slider("每表工作线程", 1, 16, 4)
-        max_retries = st.slider("最大重试次数", 1, 10, 3)
-
-        if st.button("💾 保存配置", use_container_width=True):
-            update_config(manager, workers_per_table, max_retries)
-
-        # 状态刷新
-        st.subheader("🔄 状态刷新")
-        if st.button("🔄 手动刷新", use_container_width=True):
-            manager.update_status()
-            st.rerun()
+        show_sidebar()
 
     # 主内容区域
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 仪表盘", "📈 迁移监控", "🔧 任务管理", "📋 系统配置"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 仪表盘", "📈 迁移监控", "🔧 任务管理", "⚙️ 系统配置"])
 
     with tab1:
-        show_dashboard(manager)
+        show_dashboard()
 
     with tab2:
-        show_migration_monitor(manager)
+        show_migration_monitor()
 
     with tab3:
-        show_task_management(manager)
+        show_task_management()
 
     with tab4:
-        show_system_config(manager)
+        show_system_config()
 
-def start_migration(manager):
-    """开始迁移"""
-    try:
-        with st.spinner("🚀 启动迁移任务..."):
-            success = manager.migration_app.migrate_all_tables_parallel()
-            if success:
-                st.success("✅ 迁移任务启动成功！")
-            else:
-                st.error("❌ 迁移任务启动失败")
-            time.sleep(2)
-            st.rerun()
-    except Exception as e:
-        st.error(f"❌ 启动迁移失败: {str(e)}")
+    # 自动刷新
+    if st.session_state.auto_refresh:
+        time.sleep(2)
+        st.rerun()
 
-def stop_migration(manager):
-    """停止迁移"""
-    try:
-        with st.spinner("🛑 停止迁移任务..."):
-            manager.migration_app.shutdown()
-            st.success("✅ 迁移任务已停止")
-            time.sleep(2)
-            st.rerun()
-    except Exception as e:
-        st.error(f"❌ 停止迁移失败: {str(e)}")
+def show_sidebar():
+    """显示侧边栏"""
+    st.header("控制面板")
 
-def migrate_single_table(manager, table_name, days):
-    """迁移单个表"""
-    try:
-        with st.spinner(f"🔧 迁移表 {table_name}..."):
-            # 查找对应的源表
-            source_table = None
-            for src, tgt in zip(Config.SOURCE_TABLES, Config.TARGET_TABLES):
-                if tgt == table_name:
-                    source_table = src
-                    break
+    # 系统信息
+    st.subheader("📊 系统信息")
+    status = st.session_state.migration_app.get_status()
 
-            if source_table:
-                success = manager.migration_app.migrate_single_table(source_table, table_name, days)
-                if success:
-                    st.success(f"✅ 表 {table_name} 迁移成功！")
-                else:
-                    st.error(f"❌ 表 {table_name} 迁移失败")
-            else:
-                st.error(f"❌ 未找到表 {table_name} 的配置")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("运行状态", "🟢 运行中" if status['is_running'] else "🟡 空闲")
+    with col2:
+        st.metric("总记录数", f"{status['stats'].total_records:,}")
 
-            time.sleep(2)
-            st.rerun()
-    except Exception as e:
-        st.error(f"❌ 单表迁移失败: {str(e)}")
+    # 迁移控制
+    st.subheader("🎮 迁移控制")
 
-def update_config(manager, workers, retries):
-    """更新配置"""
-    try:
-        # 这里可以添加配置更新逻辑
-        st.success("✅ 配置已保存（演示功能）")
-        time.sleep(1)
-    except Exception as e:
-        st.error(f"❌ 配置更新失败: {str(e)}")
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("▶️ 开始迁移", use_container_width=True,
+                    disabled=status['is_running'], key="start_all"):
+            start_migration()
 
-def show_dashboard(manager):
+    with col2:
+        if st.button("⏹️ 停止迁移", use_container_width=True,
+                    disabled=not status['is_running'], key="stop_all"):
+            stop_migration()
+
+    # 单表迁移
+    st.subheader("📋 单表迁移")
+    table_options = [t for t in Config.TARGET_TABLES]
+    selected_table = st.selectbox("选择表", table_options, key="table_select")
+    migration_days = st.slider("迁移天数", 1, 90, 30, key="days_slider")
+
+    if st.button("🔧 迁移选中表", use_container_width=True,
+                disabled=status['is_running'], key="start_single"):
+        migrate_single_table(selected_table, migration_days)
+
+    # 连接测试
+    st.subheader("🔌 连接测试")
+    if st.button("测试数据库连接", use_container_width=True, key="test_conn"):
+        test_connections()
+
+    # 配置选项
+    st.subheader("⚙️ 配置选项")
+    st.session_state.auto_refresh = st.checkbox("自动刷新", value=True, key="auto_refresh")
+    workers = st.slider("工作线程数", 1, 16, 4, key="workers_slider")
+
+    if st.button("💾 更新配置", use_container_width=True, key="update_config"):
+        update_worker_config(workers)
+
+def show_dashboard():
     """显示仪表盘"""
     st.header("📊 实时监控仪表盘")
 
-    # 获取状态信息
-    status = manager.get_migration_status()
+    status = st.session_state.migration_app.get_status()
+    overall_progress = st.session_state.migration_app.get_overall_progress()
 
-    # 关键指标
+    # 关键指标卡片
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        st.metric("总记录数", f"{status.get('total_records', 0):,}")
+        st.metric("总记录数", f"{overall_progress['total_records']:,}")
 
     with col2:
-        st.metric("完成任务数", f"{status.get('completed_tasks', 0):,}")
+        st.metric("完成进度", f"{overall_progress['progress_percentage']:.1f}%")
 
     with col3:
-        st.metric("失败任务数", f"{status.get('failed_tasks', 0):,}")
+        st.metric("运行时间", f"{overall_progress['execution_time']:.1f}s")
 
     with col4:
-        st.metric("运行状态", "🟢 运行中" if status.get('is_running', False) else "🟡 空闲")
+        st.metric("表状态", f"{overall_progress['completed_tables']}/{overall_progress['total_tables']}")
 
-    # 迁移进度
-    st.subheader("📈 迁移进度")
+    # 进度条
+    progress = overall_progress['progress_percentage'] / 100
+    st.progress(progress)
 
-    # 创建示例数据（实际中应该从应用获取）
-    progress_data = {
-        '表名': Config.TARGET_TABLES,
-        '进度 (%)': [75, 60, 45, 80],  # 示例数据
-        '记录数': [15000, 12000, 9000, 20000]  # 示例数据
-    }
+    # 迁移统计图表
+    st.subheader("📈 迁移统计")
 
-    df_progress = pd.DataFrame(progress_data)
+    # 创建表状态数据
+    table_data = []
+    for table_name in Config.TARGET_TABLES:
+        table_info = st.session_state.migration_app.get_table_progress(table_name)
+        table_data.append({
+            '表名': table_name,
+            '状态': table_info.get('status', 'unknown'),
+            '最后迁移': table_info.get('last_migration', '从未'),
+            '记录数': table_info.get('records_migrated', 0),
+            '描述': table_info.get('description', '')
+        })
 
-    # 进度条显示
-    for _, row in df_progress.iterrows():
-        st.write(f"**{row['表名']}**")
-        st.progress(row['进度 (%)'] / 100)
-        st.write(f"记录数: {row['记录数']:,} | 进度: {row['进度 (%)']}%")
-        st.write("---")
+    df_tables = pd.DataFrame(table_data)
 
-    # 性能图表
-    st.subheader("🚀 性能指标")
+    # 状态分布饼图
+    if not df_tables.empty:
+        status_counts = df_tables['状态'].value_counts()
+        fig_pie = px.pie(
+            values=status_counts.values,
+            names=status_counts.index,
+            title='表状态分布',
+            color_discrete_sequence=px.colors.qualitative.Set3
+        )
+        st.plotly_chart(fig_pie, use_container_width=True)
 
-    # 创建示例性能数据
-    performance_data = {
-        '时间': [f"T-{i}" for i in range(10, 0, -1)],
-        '处理速度 (记录/秒)': [1200, 1150, 1250, 1300, 1280, 1350, 1400, 1380, 1420, 1450]
-    }
+    # 记录数柱状图
+    if not df_tables.empty:
+        fig_bar = px.bar(
+            df_tables,
+            x='表名',
+            y='记录数',
+            title='各表迁移记录数',
+            color='状态',
+            color_discrete_map={
+                'completed': '#00CC96',
+                'failed': '#EF553B',
+                'not_started': '#636EFA'
+            }
+        )
+        st.plotly_chart(fig_bar, use_container_width=True)
 
-    df_perf = pd.DataFrame(performance_data)
-
-    fig = px.line(df_perf, x='时间', y='处理速度 (记录/秒)',
-                  title='迁移处理速度趋势', markers=True)
-    st.plotly_chart(fig, use_container_width=True)
-
-def show_migration_monitor(manager):
+def show_migration_monitor():
     """显示迁移监控"""
     st.header("📈 实时迁移监控")
 
     # 表状态监控
     st.subheader("🔄 表迁移状态")
 
-    # 创建表状态数据
-    table_status_data = []
-    for i, (source, target) in enumerate(zip(Config.SOURCE_TABLES, Config.TARGET_TABLES)):
-        table_status_data.append({
-            '序号': i + 1,
-            '源表': source,
-            '目标表': target,
-            '状态': '🟢 完成' if i % 2 == 0 else '🟡 进行中',
-            '开始时间': '2024-01-01 10:00',
-            '结束时间': '2024-01-01 12:00' if i % 2 == 0 else '进行中',
-            '记录数': f"{10000 + i * 2000:,}"
+    table_data = []
+    for table_name in Config.TARGET_TABLES:
+        table_info = st.session_state.migration_app.get_table_progress(table_name)
+        table_data.append({
+            '表名': table_name,
+            '状态': get_status_icon(table_info.get('status', 'unknown')),
+            '最后迁移时间': table_info.get('last_migration', '从未'),
+            '迁移记录数': f"{table_info.get('records_migrated', 0):,}",
+            '描述': table_info.get('description', '')
         })
 
-    df_status = pd.DataFrame(table_status_data)
-    st.dataframe(df_status, use_container_width=True)
+    df_status = pd.DataFrame(table_data)
+    st.dataframe(df_status, use_container_width=True, hide_index=True)
 
     # 实时日志
-    st.subheader("📝 实时日志")
+    st.subheader("📝 系统日志")
 
-    # 创建日志显示区域
+    # 创建日志显示区域（模拟日志）
     log_placeholder = st.empty()
 
-    # 模拟实时日志（实际中应该从日志文件读取）
+    # 模拟实时日志
     sample_logs = [
-        "INFO: 开始处理表 ods_query 的数据迁移",
-        "INFO: 查询到 1500 条记录",
-        "INFO: 成功插入 1500 条记录到MySQL",
-        "INFO: 表 ods_query 迁移完成，耗时 45.2 秒",
-        "INFO: 开始处理表 ods_campain 的数据迁移",
-        "INFO: 查询到 3200 条记录",
-        "WARNING: 遇到锁等待超时，重试中...",
-        "INFO: 重试成功，继续处理"
+        f"{datetime.now().strftime('%H:%M:%S')} - INFO: 系统启动完成",
+        f"{datetime.now().strftime('%H:%M:%S')} - INFO: 数据库连接正常",
+        f"{datetime.now().strftime('%H:%M:%S')} - INFO: 准备开始数据迁移",
     ]
 
-    log_text = "\n".join([f"{datetime.now().strftime('%H:%M:%S')} - {log}"
-                         for log in sample_logs[-10:]])  # 显示最后10条
+    status = st.session_state.migration_app.get_status()
+    if status['is_running']:
+        sample_logs.append(f"{datetime.now().strftime('%H:%M:%S')} - INFO: 迁移任务进行中...")
 
-    log_placeholder.text_area("实时日志", log_text, height=200, disabled=True)
+    log_text = "\n".join(sample_logs)
+    log_placeholder.text_area("实时日志", log_text, height=200, disabled=True, key="log_area")
 
-    # 自动刷新
-    if st.checkbox("🔄 自动刷新日志（每5秒）"):
-        time.sleep(5)
-        st.rerun()
-
-def show_task_management(manager):
+def show_task_management():
     """显示任务管理"""
     st.header("🔧 迁移任务管理")
 
@@ -322,28 +246,27 @@ def show_task_management(manager):
     col1, col2 = st.columns(2)
 
     with col1:
-        st.info("待处理任务")
-        pending_tasks = [
-            {"表名": "ods_query", "日期": "2024-01-01", "优先级": "高"},
-            {"表名": "ods_campain", "日期": "2024-01-02", "优先级": "高"},
-            {"表名": "ods_campaign_dsp", "日期": "2024-01-03", "优先级": "中"},
-        ]
-
-        for task in pending_tasks:
-            with st.expander(f"{task['表名']} - {task['日期']}"):
-                st.write(f"优先级: {task['优先级']}")
-                if st.button(f"立即处理", key=f"process_{task['表名']}"):
-                    st.success(f"开始处理 {task['表名']}")
+        st.info("🔵 待处理任务")
+        for table in Config.TARGET_TABLES:
+            table_info = st.session_state.migration_app.get_table_progress(table)
+            if table_info.get('status') in ['not_started', 'failed']:
+                with st.expander(f"{table} - {table_info.get('description', '')}"):
+                    st.write(f"状态: {table_info.get('status', 'unknown')}")
+                    st.write(f"最后迁移: {table_info.get('last_migration', '从未')}")
+                    if st.button("立即处理", key=f"process_{table}"):
+                        migrate_single_table(table, 30)
 
     with col2:
-        st.success("已完成任务")
-        completed_tasks = [
-            {"表名": "ods_aws_asin_philips", "日期": "2023-12-30", "状态": "成功"},
-            {"表名": "ods_query", "日期": "2023-12-29", "状态": "成功"},
-        ]
+        st.success("🟢 已完成任务")
+        completed_tables = []
+        for table in Config.TARGET_TABLES:
+            table_info = st.session_state.migration_app.get_table_progress(table)
+            if table_info.get('status') == 'completed':
+                completed_tables.append(table)
+                st.write(f"✅ {table} - {table_info.get('records_migrated', 0):,} 条记录")
 
-        for task in completed_tasks:
-            st.write(f"✅ {task['表名']} - {task['日期']}")
+        if not completed_tables:
+            st.write("暂无已完成任务")
 
     # 批量操作
     st.subheader("🎯 批量操作")
@@ -351,18 +274,18 @@ def show_task_management(manager):
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        if st.button("🚀 启动全部任务", use_container_width=True):
-            st.info("开始执行所有待处理任务...")
+        if st.button("🚀 启动全部任务", use_container_width=True, key="start_all_tasks"):
+            start_migration()
 
     with col2:
-        if st.button("⏸️ 暂停所有任务", use_container_width=True):
-            st.warning("已暂停所有运行中的任务")
+        if st.button("⏸️ 暂停所有任务", use_container_width=True, key="pause_all"):
+            stop_migration()
 
     with col3:
-        if st.button("🗑️ 清空任务队列", use_container_width=True):
-            st.error("任务队列已清空")
+        if st.button("🔄 重置状态", use_container_width=True, key="reset_all"):
+            reset_migration()
 
-def show_system_config(manager):
+def show_system_config():
     """显示系统配置"""
     st.header("⚙️ 系统配置管理")
 
@@ -373,15 +296,15 @@ def show_system_config(manager):
 
     with col1:
         st.write("**ClickHouse配置**")
-        st.text_input("主机", value=Config.CLICKHOUSE_CONFIG['host'], disabled=True)
-        st.number_input("端口", value=Config.CLICKHOUSE_CONFIG['port'], disabled=True)
-        st.text_input("数据库", value=Config.CLICKHOUSE_CONFIG['database'], disabled=True)
+        st.text_input("主机", value=Config.CLICKHOUSE_CONFIG['host'], disabled=True, key="ch_host")
+        st.number_input("端口", value=Config.CLICKHOUSE_CONFIG['port'], disabled=True, key="ch_port")
+        st.text_input("数据库", value=Config.CLICKHOUSE_CONFIG['database'], disabled=True, key="ch_db")
 
     with col2:
         st.write("**MySQL配置**")
-        st.text_input("主机", value=Config.MYSQL_CONFIG['host'], disabled=True)
-        st.number_input("端口", value=Config.MYSQL_CONFIG['port'], disabled=True)
-        st.text_input("数据库", value=Config.MYSQL_CONFIG['database'], disabled=True)
+        st.text_input("主机", value=Config.MYSQL_CONFIG['host'], disabled=True, key="mysql_host")
+        st.number_input("端口", value=Config.MYSQL_CONFIG['port'], disabled=True, key="mysql_port")
+        st.text_input("数据库", value=Config.MYSQL_CONFIG['database'], disabled=True, key="mysql_db")
 
     # 性能配置
     st.subheader("🚀 性能配置")
@@ -389,31 +312,29 @@ def show_system_config(manager):
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        workers = st.slider("工作线程数", 1, 16, 4)
+        workers = st.slider("工作线程数", 1, 16, 4, key="config_workers")
 
     with col2:
-        batch_size = st.selectbox("批量大小", [500, 1000, 2000, 5000], index=2)
+        batch_size = st.selectbox("批量大小", [500, 1000, 2000, 5000], index=2, key="batch_size")
 
     with col3:
-        retries = st.slider("最大重试次数", 1, 10, 3)
+        retries = st.slider("最大重试次数", 1, 10, 3, key="max_retries")
 
     # 表配置
-    st.subheader("📊 表映射配置")
+    st.subheader("📊 表迁移配置")
 
     table_config_data = []
     for source, target in zip(Config.SOURCE_TABLES, Config.TARGET_TABLES):
-        days_config = Config.get_table_migration_days()
-        days = days_config.get(target, 30)
-
+        days = Config.MIGRATION_DAYS.get(target, 30)
         table_config_data.append({
             '源表': source,
             '目标表': target,
             '迁移天数': days,
-            '状态': '🟢 启用'
+            '状态': '启用'
         })
 
     df_config = pd.DataFrame(table_config_data)
-    st.dataframe(df_config, use_container_width=True)
+    st.dataframe(df_config, use_container_width=True, hide_index=True)
 
     # 配置操作
     st.subheader("💾 配置操作")
@@ -421,13 +342,108 @@ def show_system_config(manager):
     col1, col2 = st.columns(2)
 
     with col1:
-        if st.button("💾 保存配置", use_container_width=True):
+        if st.button("💾 保存配置", use_container_width=True, key="save_config"):
             st.success("配置保存成功！")
 
     with col2:
-        if st.button("🔄 重置配置", use_container_width=True):
+        if st.button("🔄 重置配置", use_container_width=True, key="reset_config"):
             st.warning("配置已重置为默认值")
 
-# 运行应用
+def start_migration():
+    """开始迁移"""
+    try:
+        with st.spinner("🚀 启动迁移任务..."):
+            success = st.session_state.migration_app.migrate_all_tables()
+            if success:
+                st.success("✅ 迁移任务启动成功！")
+                st.session_state.migration_history.append({
+                    'timestamp': datetime.now(),
+                    'action': 'start_all',
+                    'success': True
+                })
+            else:
+                st.error("❌ 迁移任务启动失败")
+            time.sleep(2)
+            st.rerun()
+    except Exception as e:
+        st.error(f"❌ 启动迁移失败: {str(e)}")
+
+def stop_migration():
+    """停止迁移"""
+    try:
+        with st.spinner("🛑 停止迁移任务..."):
+            success = st.session_state.migration_app.stop_migration()
+            if success:
+                st.success("✅ 迁移任务已停止")
+                st.session_state.migration_history.append({
+                    'timestamp': datetime.now(),
+                    'action': 'stop',
+                    'success': True
+                })
+            else:
+                st.warning("⚠️ 没有运行中的迁移任务")
+            time.sleep(2)
+            st.rerun()
+    except Exception as e:
+        st.error(f"❌ 停止迁移失败: {str(e)}")
+
+def migrate_single_table(table_name, days):
+    """迁移单个表"""
+    try:
+        with st.spinner(f"🔧 迁移表 {table_name}..."):
+            success = st.session_state.migration_app.migrate_single_table(table_name, days)
+            if success:
+                st.success(f"✅ 表 {table_name} 迁移成功！")
+                st.session_state.migration_history.append({
+                    'timestamp': datetime.now(),
+                    'action': f'migrate_{table_name}',
+                    'success': True,
+                    'days': days
+                })
+            else:
+                st.error(f"❌ 表 {table_name} 迁移失败")
+            time.sleep(2)
+            st.rerun()
+    except Exception as e:
+        st.error(f"❌ 单表迁移失败: {str(e)}")
+
+def test_connections():
+    """测试连接"""
+    try:
+        with st.spinner("🔌 测试数据库连接..."):
+            results = st.session_state.migration_app.test_connections()
+
+            if results['clickhouse'] and results['mysql']:
+                st.success("✅ 所有数据库连接正常")
+            else:
+                if not results['clickhouse']:
+                    st.error("❌ ClickHouse连接失败")
+                if not results['mysql']:
+                    st.error("❌ MySQL连接失败")
+    except Exception as e:
+        st.error(f"❌ 连接测试失败: {str(e)}")
+
+def update_worker_config(workers):
+    """更新工作线程配置"""
+    # 这里可以添加配置更新逻辑
+    st.session_state.migration_app = DataMigrationApp(max_workers=workers)
+    st.success(f"✅ 工作线程数已更新为: {workers}")
+
+def reset_migration():
+    """重置迁移状态"""
+    st.session_state.migration_app = DataMigrationApp()
+    st.success("✅ 迁移状态已重置")
+
+def get_status_icon(status):
+    """获取状态图标"""
+    icons = {
+        'completed': '🟢',
+        'running': '🟡',
+        'failed': '🔴',
+        'not_started': '⚪',
+        'unknown': '⚫'
+    }
+    return icons.get(status, '⚫')
+
 if __name__ == "__main__":
     main()

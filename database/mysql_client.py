@@ -1,84 +1,124 @@
-"""MySQL客户端管理"""
-import logging
+"""MySQL客户端"""
 import pymysql
-from typing import List, Any, Dict, Tuple
-from threading import Lock
-
+import logging
+from typing import List, Dict, Any, Optional
 from config.settings import Config
 
-logger = logging.getLogger('DataMigrationApp')
+logger = logging.getLogger(__name__)
 
-
-class MySQLClientManager:
-    """MySQL客户端管理器"""
+class MySQLClient:
+    """MySQL客户端"""
 
     def __init__(self):
-        self.connections = {}
-        self.lock = Lock()
         self.config = Config.MYSQL_CONFIG
+        self.connection = None
 
-    def get_connection(self, thread_id: int, table_index: int = 0):
-        """获取MySQL连接"""
-        key = f"{thread_id}_{table_index}"
-        with self.lock:
-            if key not in self.connections:
-                logger.info(f"Creating MySQL connection for thread {thread_id}, table {table_index}")
-                try:
-                    mysql_config = self.config.copy()
-                    conn = pymysql.connect(**mysql_config)
-
-                    # 优化连接设置
-                    with conn.cursor() as cursor:
-                        cursor.execute("SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED")
-                        cursor.execute(f"SET SESSION innodb_lock_wait_timeout = {Config.LOCK_TIMEOUT}")
-                        cursor.execute("SET SESSION wait_timeout = 28800")
-                        conn.commit()
-
-                    self.connections[key] = conn
-
-                except Exception as e:
-                    logger.error(f"Failed to create MySQL connection: {str(e)}")
-                    raise
-            return self.connections[key]
-
-    def close_all(self):
-        """关闭所有连接"""
-        with self.lock:
-            for key, conn in self.connections.items():
-                try:
-                    conn.close()
-                except Exception as e:
-                    logger.warning(f"Error closing MySQL connection {key}: {str(e)}")
-            self.connections.clear()
-
-    def create_table_if_not_exists(self, thread_id: int, table_name: str, columns: List, table_index: int = 0) -> bool:
-        """创建表（如果不存在）"""
+    def connect(self):
+        """连接数据库"""
         try:
-            conn = self.get_connection(thread_id, table_index)
-            with conn.cursor() as cursor:
-                cursor.execute(f"SHOW TABLES LIKE '{table_name}'")
-                if not cursor.fetchone():
-                    logger.info(f"Table {table_name} does not exist, creating...")
-
-                    create_sql = self._build_create_table_sql(table_name, columns)
-                    cursor.execute(create_sql)
-                    conn.commit()
-                    logger.info(f"Created target table: {table_name}")
-                    return True
+            self.connection = pymysql.connect(**self.config)
+            logger.info("MySQL连接成功")
+            return True
+        except Exception as e:
+            logger.error(f"MySQL连接失败: {str(e)}")
             return False
 
+    def disconnect(self):
+        """断开连接"""
+        if self.connection:
+            try:
+                self.connection.close()
+                logger.info("MySQL连接已关闭")
+            except Exception as e:
+                logger.error(f"关闭MySQL连接失败: {str(e)}")
+
+    def execute_query(self, query: str, params: tuple = None,
+                     fetch: bool = True) -> Optional[Any]:
+        """执行查询"""
+        try:
+            if not self.connection or not self.connection.open:
+                self.connect()
+
+            with self.connection.cursor() as cursor:
+                cursor.execute(query, params)
+                if fetch:
+                    result = cursor.fetchall()
+                    self.connection.commit()
+                    return result
+                else:
+                    self.connection.commit()
+                    return cursor.rowcount
         except Exception as e:
-            logger.error(f"Error creating table {table_name}: {str(e)}")
-            raise
+            logger.error(f"MySQL查询失败: {str(e)}")
+            if self.connection:
+                self.connection.rollback()
+            return None
 
-    def _build_create_table_sql(self, table_name: str, columns: List) -> str:
-        """构建创建表SQL"""
-        type_mapping = Config.get_type_mapping()
-        column_definitions = []
+    def execute_many(self, query: str, params: List[tuple]) -> int:
+        """批量执行"""
+        try:
+            if not self.connection or not self.connection.open:
+                self.connect()
 
-        for col in columns:
-            mysql_type = type_mapping.get(col.get_type().lower(), 'TEXT')
-            column_definitions.append(f"`{col.get_name().lower()}` {mysql_type}")
+            with self.connection.cursor() as cursor:
+                cursor.executemany(query, params)
+                self.connection.commit()
+                return cursor.rowcount
+        except Exception as e:
+            logger.error(f"MySQL批量执行失败: {str(e)}")
+            if self.connection:
+                self.connection.rollback()
+            return 0
 
-        create_sql = f"CREATE TABLE {table_name} ({', '.join(column_definitions)}) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
-        return create_sql
+    def table_exists(self, table_name: str) -> bool:
+        """检查表是否存在"""
+        query = "SHOW TABLES LIKE %s"
+        result = self.execute_query(query, (table_name,))
+        return bool(result)
+
+    def create_table(self, table_name: str, columns: List[Dict]) -> bool:
+        """创建表"""
+        try:
+            column_definitions = []
+            for col in columns:
+                mysql_type = self._map_column_type(col['type'])
+                column_definitions.append(f"`{col['name']}` {mysql_type}")
+
+            create_sql = f"CREATE TABLE IF NOT EXISTS {table_name} ("
+            create_sql += ", ".join(column_definitions)
+            create_sql += ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+
+            self.execute_query(create_sql, fetch=False)
+            return True
+        except Exception as e:
+            logger.error(f"创建表失败: {str(e)}")
+            return False
+
+    def _map_column_type(self, clickhouse_type: str) -> str:
+        """映射ClickHouse类型到MySQL类型"""
+        type_mapping = {
+            'UInt8': 'TINYINT UNSIGNED',
+            'Int8': 'TINYINT',
+            'UInt16': 'SMALLINT UNSIGNED',
+            'Int16': 'SMALLINT',
+            'UInt32': 'INT UNSIGNED',
+            'Int32': 'INT',
+            'UInt64': 'BIGINT UNSIGNED',
+            'Int64': 'BIGINT',
+            'Float32': 'FLOAT',
+            'Float64': 'DOUBLE',
+            'String': 'VARCHAR(1000)',
+            'Date': 'DATE',
+            'DateTime': 'DATETIME',
+            'Decimal': 'DECIMAL(20,6)'
+        }
+
+        return type_mapping.get(clickhouse_type, 'TEXT')
+
+    def test_connection(self) -> bool:
+        """测试连接"""
+        try:
+            result = self.execute_query("SELECT 1")
+            return result is not None
+        except Exception:
+            return False

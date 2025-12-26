@@ -1,320 +1,341 @@
-"""主应用类"""
+"""数据迁移应用核心"""
 import logging
 import time
 import threading
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
-from threading import Event
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from config.settings import Config
-from core.models import MigrationTask, ColumnDefinition
-from core.counters import ThreadSafeCounter
-from database.clickhouse_client import ClickHouseClientManager
-from database.mysql_client import MySQLClientManager
-from workers.task_processor import TaskProcessor
-from workers.table_worker import TableWorkerManager
+from core.models import MigrationResult, MigrationStats, TableInfo
+from database.clickhouse_client import ClickHouseClient
+from database.mysql_client import MySQLClient
 
-logger = logging.getLogger('DataMigrationApp')
-
+logger = logging.getLogger(__name__)
 
 class DataMigrationApp:
-    """数据迁移主应用"""
+    """数据迁移应用"""
 
-    def __init__(self, max_workers_per_table: int = None, schedule_enabled: bool = True):
-        # 配置
-        self.max_workers_per_table = max_workers_per_table or Config.MAX_WORKERS_PER_TABLE
-        self.schedule_enabled = schedule_enabled
-
-        # 数据库管理器
-        self.clickhouse_manager = ClickHouseClientManager()
-        self.mysql_manager = MySQLClientManager()
-
-        # 任务处理器
-        self.task_processor = TaskProcessor(self.clickhouse_manager, self.mysql_manager)
-
-        # 工作线程管理器
-        self.worker_manager = TableWorkerManager(self.task_processor, self.max_workers_per_table)
-
-        # 状态控制
+    def __init__(self, max_workers: int = None):
+        self.max_workers = max_workers or Config.MAX_WORKERS_PER_TABLE
         self.is_running = False
-        self.shutdown_event = Event()
-        self.task_counter = ThreadSafeCounter()
+        self.current_task = None
+        self.stats = MigrationStats()
 
-        # 表配置
-        self.source_tables = Config.SOURCE_TABLES
-        self.target_tables = Config.TARGET_TABLES
-        self.table_columns_mapping = Config.get_table_columns_mapping()
+        # 数据库客户端
+        self.clickhouse_client = ClickHouseClient()
+        self.mysql_client = MySQLClient()
 
-    def migrate_single_table(self, source_table: str, target_table: str, days: int = 30) -> bool:
-        """迁移单个表"""
-        if source_table not in self.source_tables or target_table not in self.target_tables:
-            logger.error(f"Invalid table configuration: {source_table} -> {target_table}")
+        # 线程控制
+        self._stop_event = threading.Event()
+        self._lock = threading.Lock()
+
+        # 表信息
+        self.tables_info = self._initialize_tables_info()
+
+    def _initialize_tables_info(self) -> Dict[str, TableInfo]:
+        """初始化表信息"""
+        tables = {}
+        for source, target in zip(Config.SOURCE_TABLES, Config.TARGET_TABLES):
+            tables[target] = TableInfo(
+                name=target,
+                source_name=source,
+                description=f"{source} -> {target} 数据迁移",
+                migration_days=Config.MIGRATION_DAYS.get(target, 30)
+            )
+        return tables
+
+    def test_connections(self) -> Dict[str, bool]:
+        """测试数据库连接"""
+        results = {
+            'clickhouse': self.clickhouse_client.test_connection(),
+            'mysql': self.mysql_client.test_connection()
+        }
+        return results
+
+    def migrate_all_tables(self, days_override: Dict[str, int] = None) -> bool:
+        """迁移所有表"""
+        if self.is_running:
+            logger.warning("迁移任务已在运行中")
             return False
 
-        table_index = self.source_tables.index(source_table)
-        table_key = f"{source_table}_{target_table}"
-
-        logger.info(f"Starting single table migration: {source_table} -> {target_table} (last {days} days)")
+        self.is_running = True
+        self._stop_event.clear()
+        self.stats = MigrationStats(
+            total_tables=len(self.tables_info),
+            start_time=datetime.now()
+        )
 
         try:
-            # 生成迁移任务
-            tasks = self._generate_migration_tasks(source_table, target_table, table_index, days)
-            if not tasks:
-                logger.error("No tasks generated for migration")
-                return False
+            # 使用线程池并行迁移表
+            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                # 提交所有表迁移任务
+                future_to_table = {}
+                for table_info in self.tables_info.values():
+                    if self._stop_event.is_set():
+                        break
 
-            # 启动工作线程
-            self.worker_manager.start_table_workers(table_key, table_index)
+                    days = days_override.get(table_info.name, table_info.migration_days) if days_override else table_info.migration_days
+                    future = executor.submit(self._migrate_single_table, table_info, days)
+                    future_to_table[future] = table_info.name
 
-            # 添加任务到队列
-            for task in tasks:
-                self.worker_manager.add_task(table_key, task)
+                # 等待所有任务完成
+                for future in as_completed(future_to_table):
+                    if self._stop_event.is_set():
+                        break
 
-            # 等待任务完成
-            success = self.worker_manager.wait_for_completion(table_key, timeout=3600)  # 1小时超时
+                    table_name = future_to_table[future]
+                    try:
+                        result = future.result()
+                        if result.success:
+                            self.stats.completed_tables += 1
+                            self.stats.total_records += result.records_migrated
+                            self.tables_info[table_name].status = "completed"
+                            self.tables_info[table_name].last_migration = datetime.now()
+                            self.tables_info[table_name].records_migrated = result.records_migrated
+                        else:
+                            self.stats.failed_tables += 1
+                            self.tables_info[table_name].status = "failed"
+                    except Exception as e:
+                        logger.error(f"表 {table_name} 迁移失败: {str(e)}")
+                        self.stats.failed_tables += 1
+                        self.tables_info[table_name].status = "failed"
 
-            # 停止工作线程
-            self.worker_manager.stop_table_workers(table_key)
+            self.stats.end_time = datetime.now()
+            self.stats.execution_time = (self.stats.end_time - self.stats.start_time).total_seconds()
 
-            # 获取统计信息
-            stats = self.worker_manager.get_statistics()
-            logger.info(f"Single table migration completed: {stats}")
+            success = self.stats.failed_tables == 0
+            logger.info(f"所有表迁移完成: 成功{self.stats.completed_tables}/失败{self.stats.failed_tables}")
 
             return success
 
         except Exception as e:
-            logger.error(f"Single table migration failed: {str(e)}", exc_info=True)
-            self.worker_manager.stop_table_workers(table_key)
-            return False
-
-    def migrate_all_tables_parallel(self, days_override: Dict[str, int] = None) -> bool:
-        """并行迁移所有表"""
-        if self.is_running:
-            logger.warning("Migration is already running")
-            return False
-
-        self.is_running = True
-        start_time = time.time()
-
-        logger.info("=" * 60)
-        logger.info("Starting parallel migration for all tables")
-        logger.info(f"Workers per table: {self.max_workers_per_table}")
-        logger.info(f"Total tables: {len(self.source_tables)}")
-        logger.info("=" * 60)
-
-        # 重置统计
-        self.task_counter.reset()
-        self.worker_manager.total_records.reset()
-        self.worker_manager.completed_tasks.reset()
-        self.worker_manager.failed_tasks.reset()
-
-        table_threads = []
-        table_results = {}
-
-        try:
-            # 为每个表创建迁移线程
-            for i, (source_table, target_table) in enumerate(zip(self.source_tables, self.target_tables)):
-                # 使用配置的迁移天数
-                migration_days_config = {
-                    "ods_query": 30,
-                    "ods_campain": 30,
-                    "ods_campaign_dsp": 30,
-                    "ods_aws_asin_philips": 30
-                }
-                days = migration_days_config.get(target_table, 30)
-
-                # 应用覆盖配置
-                if days_override and target_table in days_override:
-                    days = days_override[target_table]
-
-                # 创建并启动表迁移线程
-                thread = threading.Thread(
-                    target=self._migrate_table_thread,
-                    args=(source_table, target_table, i, days, table_results),
-                    name=f"Table{i}-Migration",
-                    daemon=True
-                )
-                thread.start()
-                table_threads.append(thread)
-
-            # 等待所有表迁移完成
-            completed_count = 0
-            total_tables = len(table_threads)
-
-            while completed_count < total_tables and not self.shutdown_event.is_set():
-                time.sleep(2)
-
-                # 检查线程状态
-                for thread in table_threads[:]:
-                    if not thread.is_alive():
-                        table_threads.remove(thread)
-                        completed_count += 1
-
-                # 更新进度
-                if completed_count > 0:
-                    progress = (completed_count / total_tables) * 100
-                    elapsed_time = time.time() - start_time
-                    logger.info(f"Overall progress: {completed_count}/{total_tables} tables ({progress:.1f}%), "
-                                f"Elapsed: {elapsed_time:.0f}s")
-
-            # 如果收到关闭信号，停止所有迁移
-            if self.shutdown_event.is_set():
-                logger.info("Shutdown requested, stopping all migrations")
-                self._stop_all_migrations(table_threads)
-                return False
-
-            # 等待所有线程完全结束
-            for thread in table_threads:
-                thread.join(timeout=10)
-
-            # 统计结果
-            successful_tables = sum(1 for result in table_results.values() if result)
-            total_time = time.time() - start_time
-            stats = self.worker_manager.get_statistics()
-
-            logger.info("=" * 60)
-            logger.info(f"All tables migration completed in {total_time:.2f}s")
-            logger.info(f"Successful tables: {successful_tables}/{total_tables}")
-            logger.info(f"Total records migrated: {stats['total_records']}")
-            logger.info(f"Completed tasks: {stats['completed_tasks']}")
-            logger.info(f"Failed tasks: {stats['failed_tasks']}")
-            if total_time > 0:
-                logger.info(f"Average speed: {stats['total_records'] / total_time:.1f} records/s")
-            logger.info("=" * 60)
-
-            return successful_tables == total_tables
-
-        except Exception as e:
-            logger.error(f"Parallel migration failed: {str(e)}", exc_info=True)
-            self._stop_all_migrations(table_threads)
+            logger.error(f"迁移过程发生错误: {str(e)}")
             return False
         finally:
             self.is_running = False
 
-    def _migrate_table_thread(self, source_table: str, target_table: str, table_index: int,
-                              days: int, results_dict: Dict):
-        """表迁移线程函数"""
-        table_key = f"{source_table}_{target_table}"
-        thread_id = threading.get_ident()
+    def migrate_single_table(self, table_name: str, days: int = None) -> bool:
+        """迁移单个表"""
+        if table_name not in self.tables_info:
+            logger.error(f"表 {table_name} 不存在")
+            return False
+
+        if self.is_running:
+            logger.warning("迁移任务已在运行中")
+            return False
+
+        self.is_running = True
+        table_info = self.tables_info[table_name]
+        migration_days = days or table_info.migration_days
 
         try:
-            logger.info(f"Table-{table_index}: Starting migration for {source_table} -> {target_table}")
+            result = self._migrate_single_table(table_info, migration_days)
 
-            # 获取表结构
-            columns = self.clickhouse_manager.get_table_schema(thread_id, source_table, table_index)
-            if not columns:
-                logger.error(f"Table-{table_index}: Failed to get schema for {source_table}")
-                results_dict[table_key] = False
-                return
+            if result.success:
+                table_info.status = "completed"
+                table_info.last_migration = datetime.now()
+                table_info.records_migrated = result.records_migrated
+            else:
+                table_info.status = "failed"
 
-            # 创建目标表
-            self.mysql_manager.create_table_if_not_exists(thread_id, target_table, columns, table_index)
-
-            # 生成迁移任务
-            tasks = self._generate_migration_tasks(source_table, target_table, table_index, days, columns)
-            if not tasks:
-                logger.error(f"Table-{table_index}: No tasks generated")
-                results_dict[table_key] = False
-                return
-
-            # 启动工作线程
-            self.worker_manager.start_table_workers(table_key, table_index)
-
-            # 添加任务到队列
-            for task in tasks:
-                if self.shutdown_event.is_set():
-                    break
-                self.worker_manager.add_task(table_key, task)
-
-            # 等待任务完成
-            success = self.worker_manager.wait_for_completion(table_key, timeout=3600)
-
-            # 停止工作线程
-            self.worker_manager.stop_table_workers(table_key)
-
-            results_dict[table_key] = success
-            logger.info(f"Table-{table_index}: Migration {'succeeded' if success else 'failed'}")
+            return result.success
 
         except Exception as e:
-            logger.error(f"Table-{table_index}: Migration error: {str(e)}", exc_info=True)
-            results_dict[table_key] = False
-            self.worker_manager.stop_table_workers(table_key)
+            logger.error(f"表 {table_name} 迁移失败: {str(e)}")
+            table_info.status = "failed"
+            return False
+        finally:
+            self.is_running = False
 
-    def _generate_migration_tasks(self, source_table: str, target_table: str, table_index: int,
-                                  days: int, columns: List[ColumnDefinition] = None) -> List[MigrationTask]:
-        """生成迁移任务"""
-        if columns is None:
-            thread_id = threading.get_ident()
-            columns = self.clickhouse_manager.get_table_schema(thread_id, source_table, table_index)
+    def _migrate_single_table(self, table_info: TableInfo, days: int) -> MigrationResult:
+        """迁移单个表的具体实现"""
+        start_time = datetime.now()
+        result = MigrationResult(
+            success=False,
+            table_name=table_info.name,
+            records_migrated=0,
+            start_time=start_time,
+            end_time=start_time
+        )
 
-        tasks = []
-        current_time = datetime.now()
+        try:
+            logger.info(f"开始迁移表: {table_info.source_name} -> {table_info.name}")
 
-        # 生成过去days天的任务
-        for i in range(days, 0, -1):
-            if self.shutdown_event.is_set():
+            # 连接数据库
+            if not self.clickhouse_client.connect():
+                result.error_message = "ClickHouse连接失败"
+                return result
+
+            if not self.mysql_client.connect():
+                result.error_message = "MySQL连接失败"
+                return result
+
+            # 获取表结构
+            schema = self.clickhouse_client.get_table_schema(table_info.source_name)
+            if not schema:
+                result.error_message = "获取表结构失败"
+                return result
+
+            # 确保目标表存在
+            if not self.mysql_client.table_exists(table_info.name):
+                if not self.mysql_client.create_table(table_info.name, schema):
+                    result.error_message = "创建目标表失败"
+                    return result
+
+            # 迁移数据
+            records_migrated = self._migrate_table_data(table_info, schema, days)
+            result.records_migrated = records_migrated
+            result.success = True
+
+            logger.info(f"表 {table_info.name} 迁移完成: {records_migrated} 条记录")
+
+        except Exception as e:
+            result.error_message = str(e)
+            logger.error(f"表 {table_info.name} 迁移失败: {str(e)}")
+
+        finally:
+            result.end_time = datetime.now()
+            return result
+
+    def _migrate_table_data(self, table_info: TableInfo, schema: List[Dict], days: int) -> int:
+        """迁移表数据"""
+        total_records = 0
+
+        # 获取时间字段
+        time_field = Config.get_table_time_field(table_info.name)
+
+        # 按天迁移数据
+        for day_offset in range(days, 0, -1):
+            if self._stop_event.is_set():
                 break
 
-            date = current_time + timedelta(days=-i)
-            date_str = self._format_date(date)
-            task_id = self.task_counter.increment()
+            # 计算日期范围
+            end_date = datetime.now() - timedelta(days=day_offset-1)
+            start_date = end_date - timedelta(days=1)
 
-            task = MigrationTask(
-                source_table=source_table,
-                target_table=target_table,
-                day=-i,
-                date_str=date_str,
-                columns=columns,
-                task_id=task_id,
-                priority=i,  # 越旧的数据优先级越高
-                table_index=table_index
-            )
-            tasks.append(task)
+            start_date_str = start_date.strftime('%Y-%m-%d')
+            end_date_str = end_date.strftime('%Y-%m-%d')
 
-        # 按优先级排序（优先级数字越小越先执行）
-        tasks.sort(key=lambda x: x.priority)
-        logger.info(f"Generated {len(tasks)} tasks for {target_table}")
+            try:
+                # 获取源数据
+                select_fields = ", ".join([f"`{col['name']}`" for col in schema])
+                where_conditions = [
+                    f"`{time_field}` >= '{start_date_str}'",
+                    f"`{time_field}` < '{end_date_str}'"
+                ]
 
-        return tasks
+                # 添加过滤条件
+                filter_condition = Config.get_table_filter_condition(table_info.name)
+                if filter_condition:
+                    where_conditions.append(filter_condition.strip().lstrip('AND').strip())
 
-    def _stop_all_migrations(self, table_threads: List[threading.Thread]):
-        """停止所有迁移"""
-        self.shutdown_event.set()
+                where_clause = " AND ".join(where_conditions)
+                select_sql = f"SELECT {select_fields} FROM {table_info.source_name} WHERE {where_clause}"
 
-        # 停止所有工作线程
-        self.worker_manager.stop_all_workers()
+                # 执行查询
+                result = self.clickhouse_client.execute_query(select_sql)
+                if not result or not hasattr(result, 'result_rows'):
+                    continue
 
-        # 等待表线程结束
-        for thread in table_threads:
-            thread.join(timeout=2)
+                records = result.result_rows
+                if not records:
+                    continue
 
-    def _format_date(self, date_obj: datetime) -> str:
-        """格式化日期"""
-        return date_obj.strftime('%Y-%m-%d')
+                # 准备插入数据
+                column_mapping = Config.TABLE_COLUMNS_MAPPING.get(table_info.name, {})
+                column_names = []
+                for col in schema:
+                    target_name = column_mapping.get(col['name'], col['name'].lower())
+                    column_names.append(target_name)
 
-    def get_status(self) -> Dict[str, Any]:
-        """获取应用状态"""
-        stats = self.worker_manager.get_statistics()
-        return {
-            'is_running': self.is_running,
-            'total_tasks': self.task_counter.get(),
-            'total_records': stats['total_records'],
-            'completed_tasks': stats['completed_tasks'],
-            'failed_tasks': stats['failed_tasks'],
-            'shutdown_requested': self.shutdown_event.is_set()
-        }
+                placeholders = ", ".join(["%s"] * len(column_names))
+                insert_sql = f"INSERT INTO {table_info.name} ({', '.join(column_names)}) VALUES ({placeholders})"
+                # 批量插入数据
+                batch_size = Config.BATCH_SIZE
+                for i in range(0, len(records), batch_size):
+                    if self._stop_event.is_set():
+                        break
 
-    def shutdown(self):
-        """优雅关闭应用"""
-        logger.info("Shutting down migration app...")
-        self.shutdown_event.set()
-        self.is_running = False
+                    batch = records[i:i + batch_size]
+                    processed_batch = []
 
-        # 停止所有工作线程
-        self.worker_manager.stop_all_workers()
+                    for record in batch:
+                        processed_record = []
+                        for value in record:
+                            if isinstance(value, (list, dict)):
+                                processed_record.append(str(value))
+                            else:
+                                processed_record.append(value)
+                        processed_batch.append(tuple(processed_record))
 
-        # 关闭数据库连接
-        self.clickhouse_manager.close_all()
-        self.mysql_manager.close_all()
+                    # 执行批量插入
+                    try:
+                        row_count = self.mysql_client.execute_many(insert_sql, processed_batch)
+                        total_records += row_count
+                    except Exception as e:
+                        logger.error(f"批量插入失败: {str(e)}")
+                        # 尝试逐条插入
+                        for record in processed_batch:
+                            try:
+                                self.mysql_client.execute_query(insert_sql, record, fetch=False)
+                                total_records += 1
+                            except Exception as e2:
+                                logger.warning(f"单条记录插入失败: {str(e2)}")
 
-        logger.info("Migration app shutdown completed")
+                logger.info(f"日期 {start_date_str} 迁移完成: {len(records)} 条记录")
+
+            except Exception as e:
+                logger.error(f"日期 {start_date_str} 迁移失败: {str(e)}")
+                continue
+
+            return total_records
+
+            def stop_migration(self):
+                """停止迁移"""
+                if self.is_running:
+                    logger.info("正在停止迁移任务...")
+                    self._stop_event.set()
+                    self.is_running = False
+                    return True
+                return False
+
+            def get_status(self) -> Dict[str, Any]:
+                """获取应用状态"""
+                return {
+                    'is_running': self.is_running,
+                    'stats': self.stats,
+                    'tables_info': self.tables_info,
+                    'stop_requested': self._stop_event.is_set()
+                }
+
+            def get_table_progress(self, table_name: str) -> Dict[str, Any]:
+                """获取表迁移进度"""
+                if table_name not in self.tables_info:
+                    return {}
+
+                table_info = self.tables_info[table_name]
+                return {
+                    'name': table_info.name,
+                    'status': table_info.status,
+                    'last_migration': table_info.last_migration,
+                    'records_migrated': table_info.records_migrated,
+                    'description': table_info.description
+                }
+
+            def get_overall_progress(self) -> Dict[str, Any]:
+                """获取总体进度"""
+                completed = self.stats.completed_tables
+                failed = self.stats.failed_tables
+                total = self.stats.total_tables
+                progress = (completed + failed) / total * 100 if total > 0 else 0
+
+                return {
+                    'progress_percentage': progress,
+                    'completed_tables': completed,
+                    'failed_tables': failed,
+                    'total_tables': total,
+                    'total_records': self.stats.total_records,
+                    'execution_time': self.stats.execution_time,
+                    'is_running': self.is_running
+                }
