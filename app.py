@@ -320,9 +320,9 @@ def show_system_config():
 
     table_config_data = [
         {'源表': 'ods_Query', '目标表': 'ods_query', '迁移天数': 30, '状态': '启用'},
-        {'源表': 'ods_campain', '目标表': 'ods_campain', '迁移天数': 60, '状态': '启用'},
-        {'源表': 'ods_campaign_dsp', '目标表': 'ods_campaign_dsp', '迁移天数': 60, '状态': '启用'},
-        {'源表': 'ods_aws_asin_philips', '目标表': 'ods_aws_asin_philips', '迁移天数': 60, '状态': '启用'}
+        {'源表': 'ods_campain', '目标表': 'ods_campain', '迁移天数': 30, '状态': '启用'},
+        {'源表': 'ods_campaign_dsp', '目标表': 'ods_campaign_dsp', '迁移天数': 30, '状态': '启用'},
+        {'源表': 'ods_aws_asin_philips', '目标表': 'ods_aws_asin_philips', '迁移天数': 30, '状态': '启用'}
     ]
 
     df_config = pd.DataFrame(table_config_data)
