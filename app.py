@@ -1,12 +1,10 @@
-"""Streamlit数据迁移管理页面"""
+"""Streamlit数据迁移管理页面 - 修复版本"""
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import time
-import threading
-import json
 import sys
 import os
 
@@ -14,8 +12,6 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core.migration_app import DataMigrationApp
-from config.settings import Config
-from utils.logger import setup_logging
 
 # 页面配置
 st.set_page_config(
@@ -25,14 +21,9 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# 初始化日志
-setup_logging()
-
 # 初始化应用状态
 if 'migration_app' not in st.session_state:
     st.session_state.migration_app = DataMigrationApp()
-if 'last_update' not in st.session_state:
-    st.session_state.last_update = datetime.now()
 if 'migration_history' not in st.session_state:
     st.session_state.migration_history = []
 if 'auto_refresh' not in st.session_state:
@@ -86,7 +77,7 @@ def show_sidebar():
     with col1:
         st.metric("运行状态", "🟢 运行中" if status['is_running'] else "🟡 空闲")
     with col2:
-        st.metric("总记录数", f"{status['stats'].total_records:,}")
+        st.metric("总记录数", f"{status['stats']['total_records']:,}")
 
     # 迁移控制
     st.subheader("🎮 迁移控制")
@@ -104,7 +95,7 @@ def show_sidebar():
 
     # 单表迁移
     st.subheader("📋 单表迁移")
-    table_options = [t for t in Config.TARGET_TABLES]
+    table_options = ['ods_query', 'ods_campain', 'ods_campaign_dsp', 'ods_aws_asin_philips']
     selected_table = st.selectbox("选择表", table_options, key="table_select")
     migration_days = st.slider("迁移天数", 1, 90, 30, key="days_slider")
 
@@ -120,10 +111,9 @@ def show_sidebar():
     # 配置选项
     st.subheader("⚙️ 配置选项")
     st.session_state.auto_refresh = st.checkbox("自动刷新", value=True, key="auto_refresh")
-    workers = st.slider("工作线程数", 1, 16, 4, key="workers_slider")
 
-    if st.button("💾 更新配置", use_container_width=True, key="update_config"):
-        update_worker_config(workers)
+    if st.button("🔄 重置状态", use_container_width=True, key="reset"):
+        reset_migration()
 
 def show_dashboard():
     """显示仪表盘"""
@@ -156,7 +146,7 @@ def show_dashboard():
 
     # 创建表状态数据
     table_data = []
-    for table_name in Config.TARGET_TABLES:
+    for table_name in ['ods_query', 'ods_campain', 'ods_campaign_dsp', 'ods_aws_asin_philips']:
         table_info = st.session_state.migration_app.get_table_progress(table_name)
         table_data.append({
             '表名': table_name,
@@ -190,7 +180,8 @@ def show_dashboard():
             color_discrete_map={
                 'completed': '#00CC96',
                 'failed': '#EF553B',
-                'not_started': '#636EFA'
+                'running': '#636EFA',
+                'not_started': '#AB63FA'
             }
         )
         st.plotly_chart(fig_bar, use_container_width=True)
@@ -203,7 +194,7 @@ def show_migration_monitor():
     st.subheader("🔄 表迁移状态")
 
     table_data = []
-    for table_name in Config.TARGET_TABLES:
+    for table_name in ['ods_query', 'ods_campain', 'ods_campaign_dsp', 'ods_aws_asin_philips']:
         table_info = st.session_state.migration_app.get_table_progress(table_name)
         table_data.append({
             '表名': table_name,
@@ -219,22 +210,23 @@ def show_migration_monitor():
     # 实时日志
     st.subheader("📝 系统日志")
 
-    # 创建日志显示区域（模拟日志）
-    log_placeholder = st.empty()
+    # 创建日志显示
+    status = st.session_state.migration_app.get_status()
+    current_time = datetime.now().strftime('%H:%M:%S')
 
-    # 模拟实时日志
-    sample_logs = [
-        f"{datetime.now().strftime('%H:%M:%S')} - INFO: 系统启动完成",
-        f"{datetime.now().strftime('%H:%M:%S')} - INFO: 数据库连接正常",
-        f"{datetime.now().strftime('%H:%M:%S')} - INFO: 准备开始数据迁移",
+    log_entries = [
+        f"{current_time} - INFO: 系统启动完成",
+        f"{current_time} - INFO: 数据库连接正常" if status['is_running'] else f"{current_time} - INFO: 系统空闲",
     ]
 
-    status = st.session_state.migration_app.get_status()
     if status['is_running']:
-        sample_logs.append(f"{datetime.now().strftime('%H:%M:%S')} - INFO: 迁移任务进行中...")
+        log_entries.append(f"{current_time} - INFO: 迁移任务进行中...")
+        progress = st.session_state.migration_app.get_overall_progress()
+        log_entries.append(f"{current_time} - INFO: 总体进度: {progress['progress_percentage']:.1f}%")
+        log_entries.append(f"{current_time} - INFO: 已迁移记录: {progress['total_records']:,}")
 
-    log_text = "\n".join(sample_logs)
-    log_placeholder.text_area("实时日志", log_text, height=200, disabled=True, key="log_area")
+    log_text = "\n".join(log_entries)
+    st.text_area("实时日志", log_text, height=200, disabled=True, key="log_area")
 
 def show_task_management():
     """显示任务管理"""
@@ -247,23 +239,23 @@ def show_task_management():
 
     with col1:
         st.info("🔵 待处理任务")
-        for table in Config.TARGET_TABLES:
-            table_info = st.session_state.migration_app.get_table_progress(table)
+        for table_name in ['ods_query', 'ods_campain', 'ods_campaign_dsp', 'ods_aws_asin_philips']:
+            table_info = st.session_state.migration_app.get_table_progress(table_name)
             if table_info.get('status') in ['not_started', 'failed']:
-                with st.expander(f"{table} - {table_info.get('description', '')}"):
+                with st.expander(f"{table_name} - {table_info.get('description', '')}"):
                     st.write(f"状态: {table_info.get('status', 'unknown')}")
                     st.write(f"最后迁移: {table_info.get('last_migration', '从未')}")
-                    if st.button("立即处理", key=f"process_{table}"):
-                        migrate_single_table(table, 30)
+                    if st.button("立即处理", key=f"process_{table_name}"):
+                        migrate_single_table(table_name, 30)
 
     with col2:
         st.success("🟢 已完成任务")
         completed_tables = []
-        for table in Config.TARGET_TABLES:
-            table_info = st.session_state.migration_app.get_table_progress(table)
+        for table_name in ['ods_query', 'ods_campain', 'ods_campaign_dsp', 'ods_aws_asin_philips']:
+            table_info = st.session_state.migration_app.get_table_progress(table_name)
             if table_info.get('status') == 'completed':
-                completed_tables.append(table)
-                st.write(f"✅ {table} - {table_info.get('records_migrated', 0):,} 条记录")
+                completed_tables.append(table_name)
+                st.write(f"✅ {table_name} - {table_info.get('records_migrated', 0):,} 条记录")
 
         if not completed_tables:
             st.write("暂无已完成任务")
@@ -296,15 +288,15 @@ def show_system_config():
 
     with col1:
         st.write("**ClickHouse配置**")
-        st.text_input("主机", value=Config.CLICKHOUSE_CONFIG['host'], disabled=True, key="ch_host")
-        st.number_input("端口", value=Config.CLICKHOUSE_CONFIG['port'], disabled=True, key="ch_port")
-        st.text_input("数据库", value=Config.CLICKHOUSE_CONFIG['database'], disabled=True, key="ch_db")
+        st.text_input("主机", value="47.109.55.96", disabled=True, key="ch_host")
+        st.number_input("端口", value=8124, disabled=True, key="ch_port")
+        st.text_input("数据库", value="semanticdb_haiyi", disabled=True, key="ch_db")
 
     with col2:
         st.write("**MySQL配置**")
-        st.text_input("主机", value=Config.MYSQL_CONFIG['host'], disabled=True, key="mysql_host")
-        st.number_input("端口", value=Config.MYSQL_CONFIG['port'], disabled=True, key="mysql_port")
-        st.text_input("数据库", value=Config.MYSQL_CONFIG['database'], disabled=True, key="mysql_db")
+        st.text_input("主机", value="ow-masterdata-1.cavkqwqmyvuw.us-west-2.rds.amazonaws.com", disabled=True, key="mysql_host")
+        st.number_input("端口", value=3306, disabled=True, key="mysql_port")
+        st.text_input("数据库", value="ow_base", disabled=True, key="mysql_db")
 
     # 性能配置
     st.subheader("🚀 性能配置")
@@ -323,31 +315,15 @@ def show_system_config():
     # 表配置
     st.subheader("📊 表迁移配置")
 
-    table_config_data = []
-    for source, target in zip(Config.SOURCE_TABLES, Config.TARGET_TABLES):
-        days = Config.MIGRATION_DAYS.get(target, 30)
-        table_config_data.append({
-            '源表': source,
-            '目标表': target,
-            '迁移天数': days,
-            '状态': '启用'
-        })
+    table_config_data = [
+        {'源表': 'ods_Query', '目标表': 'ods_query', '迁移天数': 30, '状态': '启用'},
+        {'源表': 'ods_campain', '目标表': 'ods_campain', '迁移天数': 60, '状态': '启用'},
+        {'源表': 'ods_campaign_dsp', '目标表': 'ods_campaign_dsp', '迁移天数': 60, '状态': '启用'},
+        {'源表': 'ods_aws_asin_philips', '目标表': 'ods_aws_asin_philips', '迁移天数': 60, '状态': '启用'}
+    ]
 
     df_config = pd.DataFrame(table_config_data)
     st.dataframe(df_config, use_container_width=True, hide_index=True)
-
-    # 配置操作
-    st.subheader("💾 配置操作")
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        if st.button("💾 保存配置", use_container_width=True, key="save_config"):
-            st.success("配置保存成功！")
-
-    with col2:
-        if st.button("🔄 重置配置", use_container_width=True, key="reset_config"):
-            st.warning("配置已重置为默认值")
 
 def start_migration():
     """开始迁移"""
@@ -423,16 +399,22 @@ def test_connections():
     except Exception as e:
         st.error(f"❌ 连接测试失败: {str(e)}")
 
-def update_worker_config(workers):
-    """更新工作线程配置"""
-    # 这里可以添加配置更新逻辑
-    st.session_state.migration_app = DataMigrationApp(max_workers=workers)
-    st.success(f"✅ 工作线程数已更新为: {workers}")
-
 def reset_migration():
     """重置迁移状态"""
-    st.session_state.migration_app = DataMigrationApp()
-    st.success("✅ 迁移状态已重置")
+    try:
+        with st.spinner("🔄 重置迁移状态..."):
+            success = st.session_state.migration_app.reset_migration()
+            if success:
+                st.success("✅ 迁移状态已重置")
+                st.session_state.migration_history.append({
+                    'timestamp': datetime.now(),
+                    'action': 'reset',
+                    'success': True
+                })
+            time.sleep(1)
+            st.rerun()
+    except Exception as e:
+        st.error(f"❌ 重置失败: {str(e)}")
 
 def get_status_icon(status):
     """获取状态图标"""
@@ -441,6 +423,7 @@ def get_status_icon(status):
         'running': '🟡',
         'failed': '🔴',
         'not_started': '⚪',
+        'stopped': '🟠',
         'unknown': '⚫'
     }
     return icons.get(status, '⚫')
