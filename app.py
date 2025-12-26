@@ -1,4 +1,4 @@
-"""Streamlit数据迁移管理页面 - 修复session_state键名问题"""
+"""Streamlit数据迁移管理页面 - 修复use_container_width警告"""
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -21,14 +21,14 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# 初始化应用状态 - 修复键名问题
+# 初始化应用状态
 if 'migration_app' not in st.session_state:
     st.session_state.migration_app = DataMigrationApp()
 
 if 'migration_history' not in st.session_state:
     st.session_state.migration_history = []
 
-if 'auto_refresh_flag' not in st.session_state:  # 修复键名冲突
+if 'auto_refresh_flag' not in st.session_state:
     st.session_state.auto_refresh_flag = True
 
 def main():
@@ -63,7 +63,7 @@ def main():
         show_system_config()
 
     # 自动刷新
-    if st.session_state.auto_refresh_flag:  # 使用修复后的键名
+    if st.session_state.auto_refresh_flag:
         time.sleep(2)
         st.rerun()
 
@@ -86,12 +86,12 @@ def show_sidebar():
 
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("▶️ 开始迁移", use_container_width=True,
+        if st.button("▶️ 开始迁移", width='stretch',
                     disabled=status['is_running'], key="start_all"):
             start_migration()
 
     with col2:
-        if st.button("⏹️ 停止迁移", use_container_width=True,
+        if st.button("⏹️ 停止迁移", width='stretch',
                     disabled=not status['is_running'], key="stop_all"):
             stop_migration()
 
@@ -101,21 +101,21 @@ def show_sidebar():
     selected_table = st.selectbox("选择表", table_options, key="table_select")
     migration_days = st.slider("迁移天数", 1, 90, 30, key="days_slider")
 
-    if st.button("🔧 迁移选中表", use_container_width=True,
+    if st.button("🔧 迁移选中表", width='stretch',
                 disabled=status['is_running'], key="start_single"):
         migrate_single_table(selected_table, migration_days)
 
     # 连接测试
     st.subheader("🔌 连接测试")
-    if st.button("测试数据库连接", use_container_width=True, key="test_conn"):
+    if st.button("测试数据库连接", width='stretch', key="test_conn"):
         test_connections()
 
     # 配置选项
     st.subheader("⚙️ 配置选项")
     auto_refresh = st.checkbox("自动刷新", value=st.session_state.auto_refresh_flag, key="auto_refresh_check")
-    st.session_state.auto_refresh_flag = auto_refresh  # 使用修复后的键名
+    st.session_state.auto_refresh_flag = auto_refresh
 
-    if st.button("🔄 重置状态", use_container_width=True, key="reset"):
+    if st.button("🔄 重置状态", width='stretch', key="reset"):
         reset_migration()
 
 def show_dashboard():
@@ -170,7 +170,7 @@ def show_dashboard():
             title='表状态分布',
             color_discrete_sequence=px.colors.qualitative.Set3
         )
-        st.plotly_chart(fig_pie, use_container_width=True)
+        st.plotly_chart(fig_pie, width='stretch')
 
     # 记录数柱状图
     if not df_tables.empty:
@@ -187,7 +187,7 @@ def show_dashboard():
                 'not_started': '#AB63FA'
             }
         )
-        st.plotly_chart(fig_bar, use_container_width=True)
+        st.plotly_chart(fig_bar, width='stretch')
 
 def show_migration_monitor():
     """显示迁移监控"""
@@ -208,7 +208,7 @@ def show_migration_monitor():
         })
 
     df_status = pd.DataFrame(table_data)
-    st.dataframe(df_status, use_container_width=True, hide_index=True)
+    st.dataframe(df_status, width='stretch', hide_index=True)
 
     # 实时日志
     st.subheader("📝 系统日志")
@@ -248,7 +248,7 @@ def show_task_management():
                 with st.expander(f"{table_name} - {table_info.get('description', '')}"):
                     st.write(f"状态: {table_info.get('status', 'unknown')}")
                     st.write(f"最后迁移: {table_info.get('last_migration', '从未')}")
-                    if st.button("立即处理", key=f"process_{table_name}"):
+                    if st.button("立即处理", width='content', key=f"process_{table_name}"):
                         migrate_single_table(table_name, 30)
 
     with col2:
@@ -269,15 +269,15 @@ def show_task_management():
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        if st.button("🚀 启动全部任务", use_container_width=True, key="start_all_tasks"):
+        if st.button("🚀 启动全部任务", width='stretch', key="start_all_tasks"):
             start_migration()
 
     with col2:
-        if st.button("⏸️ 暂停所有任务", use_container_width=True, key="pause_all"):
+        if st.button("⏸️ 暂停所有任务", width='stretch', key="pause_all"):
             stop_migration()
 
     with col3:
-        if st.button("🔄 重置状态", use_container_width=True, key="reset_all"):
+        if st.button("🔄 重置状态", width='stretch', key="reset_all"):
             reset_migration()
 
 def show_system_config():
@@ -320,13 +320,13 @@ def show_system_config():
 
     table_config_data = [
         {'源表': 'ods_Query', '目标表': 'ods_query', '迁移天数': 30, '状态': '启用'},
-        {'源表': 'ods_campain', '目标表': 'ods_campain', '迁移天数': 30, '状态': '启用'},
-        {'源表': 'ods_campaign_dsp', '目标表': 'ods_campaign_dsp', '迁移天数': 30, '状态': '启用'},
-        {'源表': 'ods_aws_asin_philips', '目标表': 'ods_aws_asin_philips', '迁移天数': 30, '状态': '启用'}
+        {'源表': 'ods_campain', '目标表': 'ods_campain', '迁移天数': 60, '状态': '启用'},
+        {'源表': 'ods_campaign_dsp', '目标表': 'ods_campaign_dsp', '迁移天数': 60, '状态': '启用'},
+        {'源表': 'ods_aws_asin_philips', '目标表': 'ods_aws_asin_philips', '迁移天数': 60, '状态': '启用'}
     ]
 
     df_config = pd.DataFrame(table_config_data)
-    st.dataframe(df_config, use_container_width=True, hide_index=True)
+    st.dataframe(df_config, width='stretch', hide_index=True)
 
     # 配置操作
     st.subheader("💾 配置操作")
@@ -334,11 +334,11 @@ def show_system_config():
     col1, col2 = st.columns(2)
 
     with col1:
-        if st.button("💾 保存配置", use_container_width=True, key="save_config"):
+        if st.button("💾 保存配置", width='stretch', key="save_config"):
             st.success("配置保存成功！")
 
     with col2:
-        if st.button("🔄 重置配置", use_container_width=True, key="reset_config"):
+        if st.button("🔄 重置配置", width='stretch', key="reset_config"):
             st.warning("配置已重置为默认值")
 
 def start_migration():
