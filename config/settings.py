@@ -78,9 +78,9 @@ class Config:
     # 迁移配置
     MIGRATION_DAYS = {
         "ods_query": 30,
-        "ods_campain": 60,
-        "ods_campaign_dsp": 60,
-        "ods_aws_asin_philips": 60
+        "ods_campain": 30,
+        "ods_campaign_dsp": 30,
+        "ods_aws_asin_philips": 30
     }
 
     # 性能配置

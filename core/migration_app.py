@@ -195,11 +195,13 @@ class DataMigrationApp:
             return False
 
         self.is_running = True
+        self._stop_event.clear()
 
         def run_single_table():
             try:
                 table_info = self.tables_info[table_name]
                 table_info['status'] = 'running'
+                table_info['records_migrated'] = 0
 
                 # 模拟迁移过程
                 for step in range(10):
@@ -216,12 +218,16 @@ class DataMigrationApp:
                 if not self._stop_event.is_set():
                     table_info['status'] = 'completed'
                     table_info['last_migration'] = datetime.now()
+                    self.stats['completed_tables'] += 1
+                else:
+                    table_info['status'] = 'stopped'
 
                 self.is_running = False
 
             except Exception as e:
                 logger.error(f"单表迁移出错: {str(e)}")
                 table_info['status'] = 'failed'
+                self.stats['failed_tables'] += 1
                 self.is_running = False
 
         thread = threading.Thread(target=run_single_table, daemon=True)
@@ -257,5 +263,6 @@ class DataMigrationApp:
         for table_info in self.tables_info.values():
             table_info['status'] = 'not_started'
             table_info['records_migrated'] = 0
+            table_info['last_migration'] = None
 
         return True

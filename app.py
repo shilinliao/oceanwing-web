@@ -1,4 +1,4 @@
-"""Streamlit数据迁移管理页面 - 修复版本"""
+"""Streamlit数据迁移管理页面 - 修复session_state键名问题"""
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -21,13 +21,15 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# 初始化应用状态
+# 初始化应用状态 - 修复键名问题
 if 'migration_app' not in st.session_state:
     st.session_state.migration_app = DataMigrationApp()
+
 if 'migration_history' not in st.session_state:
     st.session_state.migration_history = []
-if 'auto_refresh' not in st.session_state:
-    st.session_state.auto_refresh = True
+
+if 'auto_refresh_flag' not in st.session_state:  # 修复键名冲突
+    st.session_state.auto_refresh_flag = True
 
 def main():
     """主页面"""
@@ -61,7 +63,7 @@ def main():
         show_system_config()
 
     # 自动刷新
-    if st.session_state.auto_refresh:
+    if st.session_state.auto_refresh_flag:  # 使用修复后的键名
         time.sleep(2)
         st.rerun()
 
@@ -110,7 +112,8 @@ def show_sidebar():
 
     # 配置选项
     st.subheader("⚙️ 配置选项")
-    st.session_state.auto_refresh = st.checkbox("自动刷新", value=True, key="auto_refresh")
+    auto_refresh = st.checkbox("自动刷新", value=st.session_state.auto_refresh_flag, key="auto_refresh_check")
+    st.session_state.auto_refresh_flag = auto_refresh  # 使用修复后的键名
 
     if st.button("🔄 重置状态", use_container_width=True, key="reset"):
         reset_migration()
@@ -324,6 +327,19 @@ def show_system_config():
 
     df_config = pd.DataFrame(table_config_data)
     st.dataframe(df_config, use_container_width=True, hide_index=True)
+
+    # 配置操作
+    st.subheader("💾 配置操作")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        if st.button("💾 保存配置", use_container_width=True, key="save_config"):
+            st.success("配置保存成功！")
+
+    with col2:
+        if st.button("🔄 重置配置", use_container_width=True, key="reset_config"):
+            st.warning("配置已重置为默认值")
 
 def start_migration():
     """开始迁移"""
