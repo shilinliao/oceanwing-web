@@ -1,62 +1,79 @@
-"""
-最简单的 Streamlit 应用
-保证能部署成功
-"""
-
 import streamlit as st
 from datetime import datetime
 
+# 设置页面标题和图标
 st.set_page_config(
-    page_title="OceanWing",
-    page_icon="🌊",
+    page_title="我的 Streamlit 应用",
+    page_icon=":rocket:",
     layout="wide"
 )
 
-st.title("🌊 OceanWing 数据平台")
-st.write("应用部署成功！")
+# 应用标题
+st.title("欢迎来到我的 Streamlit 应用")
+st.write(f"今天是 {datetime.now().strftime('%Y年%m月%d日')}")
 
-st.markdown("---")
+# 侧边栏
+with st.sidebar:
+    st.header("导航")
+    menu_option = st.radio(
+        "选择功能",
+        ["主页", "数据分析", "可视化", "设置"]
+    )
 
-# 基本信息
-col1, col2 = st.columns(2)
-with col1:
-    st.info(f"当前时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-with col2:
-    st.success(f"Streamlit 版本: {st.__version__}")
+    st.divider()
+    st.write("关于")
+    st.caption("这是一个使用 Streamlit 创建的示例应用")
 
-# 测试功能
-st.markdown("## 🎯 功能测试")
+# 主内容区
+if menu_option == "主页":
+    st.subheader("主页")
+    st.write("这里是应用的主页内容。")
 
-# 文件上传测试
-uploaded_file = st.file_uploader("测试文件上传", type=['txt', 'csv'])
-if uploaded_file is not None:
-    st.success(f"文件上传成功: {uploaded_file.name}")
-    st.info(f"文件大小: {uploaded_file.size} 字节")
+    # 示例按钮
+    if st.button("点击我"):
+        st.success("按钮被点击了！")
 
-# 数据展示
-st.markdown("## 📊 示例数据")
-import pandas as pd
-data = {
-    'ID': [1, 2, 3, 4, 5],
-    'Name': ['产品A', '产品B', '产品C', '产品D', '产品E'],
-    'Price': [100, 200, 150, 300, 250]
-}
-df = pd.DataFrame(data)
-st.dataframe(df, use_container_width=True)
+    # 示例滑块
+    value = st.slider("选择一个数值", 0, 100, 50)
+    st.write(f"你选择了: {value}")
 
-# 图表测试
-st.markdown("## 📈 示例图表")
-st.bar_chart(df.set_index('Name')['Price'])
+elif menu_option == "数据分析":
+    st.subheader("数据分析")
+    st.write("这里可以展示数据分析功能。")
 
-# 交互测试
-st.markdown("## 🎮 交互测试")
-if st.button("点击测试"):
-    st.balloons()
-    st.success("按钮点击成功！")
+    # 上传文件示例
+    uploaded_file = st.file_uploader("上传CSV文件", type=["csv"])
+    if uploaded_file is not None:
+        st.write("文件上传成功！")
+        # 这里可以添加处理文件的代码
 
-slider_value = st.slider("选择一个数值", 0, 100, 50)
-st.write(f"选择的数值: {slider_value}")
+elif menu_option == "可视化":
+    st.subheader("可视化")
+    st.write("这里可以展示数据可视化。")
+
+    # 示例图表
+    import pandas as pd
+    import numpy as np
+    import matplotlib.pyplot as plt
+
+    chart_data = pd.DataFrame(
+        np.random.randn(20, 3),
+        columns=['A', 'B', 'C']
+    )
+
+    st.line_chart(chart_data)
+
+elif menu_option == "设置":
+    st.subheader("设置")
+    st.write("这里可以配置应用设置。")
+
+    # 示例设置选项
+    dark_mode = st.checkbox("启用暗黑模式")
+    if dark_mode:
+        st.write("暗黑模式已启用")
+    else:
+        st.write("亮色模式已启用")
 
 # 页脚
-st.markdown("---")
-st.caption("© 2024 OceanWing | 部署成功")
+st.divider()
+st.caption("© 2025 OceanWing Web 应用")
