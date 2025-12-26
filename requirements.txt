@@ -1,6 +1,9 @@
 # 经过测试的 Python 3.13 兼容版本
+clickhouse-connect>=0.6.0
+PyMySQL>=1.0.0
+schedule>=1.0.0
+pytz>=2023.0
+psutil>=5.9.0
 streamlit>=1.28.0
-pandas>=2.2.0
-numpy
-pymysql
-clickhouse-connect
+plotly>=5.15.0
+pandas>=2.0.0

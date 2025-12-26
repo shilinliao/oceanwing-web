@@ -1,0 +1,25 @@
+# 可选的外部配置文件
+database:
+  clickhouse:
+    host: "47.109.55.96"
+    port: 8124
+    database: "semanticdb_haiyi"
+    username: "haiyi"
+    password: "G7f@2eBw"
+
+  mysql:
+    host: "ow-masterdata-1.cavkqwqmyvuw.us-west-2.rds.amazonaws.com"
+    port: 3306
+    database: "ow_base"
+    user: "ow_base_user"
+    password: "3we@5y_+05iu"
+
+migration:
+  workers_per_table: 4
+  max_retries: 3
+  lock_timeout: 30
+
+scheduler:
+  enabled: true
+  time: "09:00"
+  timezone: "Asia/Shanghai"
