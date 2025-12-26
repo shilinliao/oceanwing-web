@@ -8,3 +8,4 @@ psutil==5.9.6
 Werkzeug==2.3.7
 gunicorn==21.2.0
 chardet
+sqlalchemy
