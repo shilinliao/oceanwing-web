@@ -11,6 +11,7 @@ import logging
 from pathlib import Path
 import pymysql
 import clickhouse_connect
+import sys
 
 # 配置日志
 logging.basicConfig(
