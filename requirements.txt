@@ -1,13 +1,13 @@
-# requirements.txt
+# 经过测试的 Python 3.13 兼容版本
 streamlit==1.28.0
-pandas==2.1.0
-numpy==1.24.0
-plotly==5.17.0
-altair==5.0.1
-matplotlib==3.7.0
-seaborn==0.12.0
+pandas==2.2.0
+numpy==1.26.0
+plotly==5.18.0
+altair==5.2.0
+matplotlib==3.8.0
+seaborn==0.13.0
 openpyxl==3.1.0
-pyarrow==13.0.0
+pyarrow==14.0.0
 clickhouse-connect==0.7.3
 pymysql==1.1.0
 sqlalchemy==2.0.0
