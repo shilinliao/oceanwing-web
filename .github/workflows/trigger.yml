@@ -2,7 +2,7 @@ name: Trigger Streamlit App
 on:
   schedule:
     # 每5分钟运行一次
-    - cron: '*/5 * * * *'
+    - cron: '0/5 * * * *'
   # 也可以手动触发
   workflow_dispatch:
 
