@@ -9,3 +9,4 @@ plotly>=5.15.0
 pandas>=2.0.0
 sqlalchemy
 chardet
+psycopg2
