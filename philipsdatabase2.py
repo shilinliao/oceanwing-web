@@ -426,7 +426,7 @@ def export_table(table_name, mode='full', filename=None):
     """通用导出函数：支持全表/备份（CSV）或模板（XLSX）"""
     try:
         # 特殊处理 ods_goal_vcp 表的模板下载
-        if mode == 'columns' and table_name == 'ods_goal_vcp':
+        if mode == 'columns' and 'ods_goal_vcp' in table_name:
             template_path = 'temp/ods_goal_vcp.xlsx'
 
             if os.path.exists(template_path):

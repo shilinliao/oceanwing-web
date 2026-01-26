@@ -11,3 +11,4 @@ sqlalchemy>=2.0.0
 chardet
 psycopg2-binary
 clickhouse-sqlalchemy
+openpyxl
