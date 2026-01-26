@@ -45,11 +45,11 @@ EMAIL_CONFIG = {
 TABLES = {
     'ASIN_goal_philips': {'name': 'ASIN 目标数据'},
     'ods_category': {'name': '类目数据'},
-    'ods_asin_philips': {'name': 'Search term打标表'},
+    'ods_asin_philips_test': {'name': 'Search term打标表'},
     'SI_keyword_philips': {'name': 'SI 关键词数据'},
-    'ods_goal_vcp': {'name': 'Media Plan Goal'},
-    'ods_asin_sale_goal': {'name': 'Annual Goal ASIN Level'},
-    'ods_date_event': {'name': 'ods_date_event'},
+    'ods_goal_vcp_test': {'name': 'Media Plan Goal'},
+    'ods_asin_sale_goal_test': {'name': 'Annual Goal ASIN Level'},
+    'ods_date_event_test': {'name': 'ods_date_event'},
 }
 
 # ==================== 自定义样式 ====================

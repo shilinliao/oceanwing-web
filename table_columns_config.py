@@ -36,28 +36,28 @@ ods_asin_sale_goal_table_columns =[
 
 
 def get_file_columns_config(table_name):
-    if table_name == 'ods_asin_philips':
+    if  'ods_asin_philips' in table_name:
         return  ods_asin_philips_file_columns
-    elif table_name == 'ods_date_event':
+    elif 'ods_date_even' in table_name :
         return ods_date_event_file_columns
-    elif table_name == 'ods_asin_sale_goal':
+    elif 'ods_asin_sale_goal' in table_name:
         return ods_asin_sale_goal_file_columns
     return []
 
 def get_table_columns_config(table_name,df):
-    if table_name == 'ods_asin_philips':
+    if 'ods_asin_philips' in table_name:
         df.columns = ods_asin_philips_table_columns
         return df
-    elif table_name == 'ods_date_event':
+    elif 'ods_date_even' in table_name:
         df=process_ods_date_event_data( df)
         return df
-    elif table_name == 'ods_goal_vcp':
+    elif 'ods_goal_vcp' in table_name:
         result = convert_excel_correct_goal(df)
         if result is None or len(result) == 0:
             print("\n=== 正确Goal转换失败，尝试简单转换 ===")
             result = convert_excel_simple_correct_goal(df)
         return result
-    elif table_name == 'ods_asin_sale_goal':
+    elif 'ods_asin_sale_goal' in table_name :
         df.columns = ods_asin_sale_goal_table_columns
         return df
     return df
@@ -492,7 +492,6 @@ def convert_excel_simple_correct_goal(df):
 
 # 使用示例
 if __name__ == "__main__":
-
     input_file = r"C:\Users\lenovo\Downloads\新建 Microsoft Excel 工作表.xlsx"
 
     # 首先尝试正确goal转换
