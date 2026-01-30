@@ -20,7 +20,9 @@ TABLES = {
     'ods_asin_philips': 'ods_asin_philips',
     'SI_keyword_philips': 'ods_si_keyword_philips',
     'ods_goal_vcp': 'ods_goal_vcp',
-    'ods_asin_sale_goal': 'ods_asin_sale_goal'
+    'ods_asin_sale_goal': 'ods_asin_sale_goal',
+    'ods_date_event': 'ods_date_even',
+    'ods_category_dsp': 'ods_category_dsp',
 }
 
 def get_engine():
@@ -29,6 +31,20 @@ def get_engine():
     connection_string = f"postgresql+psycopg2://{POSTGRES_CONFIG['user']}:{password_encoded}@{POSTGRES_CONFIG['host']}:{POSTGRES_CONFIG['port']}/{POSTGRES_CONFIG['database']}"
     return create_engine(connection_string)
 
+def get_table_columns( table_name, database):
+    """获取数据库表的列名"""
+    try:
+        query = text(f"""SELECT column_name name
+FROM information_schema.columns
+WHERE table_name = '{table_name}'
+ORDER BY ordinal_position """)
+        with get_engine().begin() as conn:
+            result = pd.read_sql(query, conn)
+        return result['name'].tolist() if not result.empty else []
+    except Exception as e:
+        print(f'获取表结构失败: {str(e)}')
+        raise e
+
 def to_postgresql_data(table_name, upload_mode, df, batch_size=1000):
     """优化的分批插入版本 - PostgreSQL适配"""
     # try:
@@ -36,14 +52,15 @@ def to_postgresql_data(table_name, upload_mode, df, batch_size=1000):
     #     return True
     # except Exception as e:
     #     print(f"安全插入失败: {e}")
-    if table_name == 'ods_date_event':
-        table_name='ods_date_even'
+
     engine = get_engine()
     table_name = TABLES[table_name]
 
     # 将列名转为小写
     df.columns = df.columns.str.lower()
-
+    if 'ods_date_even' in table_name :
+        if 'date' in df.columns:
+            df = df.rename(columns={'date': 'date_time'})
     # 处理替换模式 - PostgreSQL使用TRUNCATE或DELETE
     if upload_mode == 'replace':
         with engine.begin() as conn:
