@@ -20,7 +20,8 @@ TABLES = {
     'ods_asin_philips': 'ods_asin_philips',
     'SI_keyword_philips': 'ods_si_keyword_philips',
     'ods_goal_vcp':'ods_goal_vcp',
-    'ods_asin_sale_goal':'ods_asin_sale_goal'
+    'ods_asin_sale_goal':'ods_asin_sale_goal',
+    'ods_date_event': 'ods_date_even',
 }
 def get_engine():
     """创建数据库连接"""
@@ -32,8 +33,6 @@ def get_engine():
 # 列名转小写
 def to_mysql_data(table_name, upload_mode, df, batch_size=1000):
     """优化的分批插入版本"""
-    if table_name == 'ods_date_event':
-        table_name='ods_date_even'
     try:
         to_mysql_data_safe(table_name, upload_mode, df)
         return True
