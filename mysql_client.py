@@ -93,6 +93,8 @@ def to_mysql_data_safe(table_name, upload_mode, df):
     """安全的批量插入，避免list of dictionaries错误"""
     engine = get_engine()
     table_name = TABLES[table_name]
+    # 预处理：将 NaN 替换为 None
+    df = df.fillna(None)
 
     with engine.connect() as conn:
         # 增加锁等待时间
@@ -119,7 +121,7 @@ def to_mysql_data_safe(table_name, upload_mode, df):
         sql = f"INSERT INTO {table_name} ({columns}) VALUES ({placeholders})"
 
         # 分批插入
-        batch_size = 100
+        batch_size = 1000
         data = [tuple(x) for x in df.itertuples(index=False, name=None)]
         total_rows = len(data)
 

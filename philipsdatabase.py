@@ -10,7 +10,9 @@ from email.header import Header
 import io
 import pytz
 import chardet
-
+import mysql_client
+import postgre_client
+import table_columns_config
 # ==================== 配置常量 ====================
 BRAND_COLOR = "#00a6e4"
 SECONDARY_COLOR = "#0088c7"
@@ -44,7 +46,8 @@ TABLES = {
     'ods_category': {'name': '类目数据'},
     'ods_asin_philips': {'name': 'ASIN 基础数据'},
     'SI_keyword_philips': {'name': 'SI 关键词数据'},
-    'ods_goal_vcp': {'name': 'VCP 目标数据'}
+    'ods_goal_vcp': {'name': 'VCP 目标数据'},
+    'ods_asin_sale_goal': {'name': 'sale goal 目标数据'}
 }
 
 # ==================== 自定义样式 ====================
@@ -425,13 +428,15 @@ def export_table(table_name, mode='full', filename=None):
             return None, f'表 {table_name} 不存在。'
         
         if mode == 'columns':
-            query = text(f"SELECT name FROM system.columns WHERE table = '{table_name}' AND database = '{DB_CONFIG['database']}' ORDER BY position")
-            with engine.connect() as conn:
-                df_columns = pd.read_sql(query, conn)
-            
+            df_columns = get_table_columns(engine, table_name, DB_CONFIG['database'])
+            if df_columns.empty:
+                query = text(f"SELECT name FROM system.columns WHERE table = '{table_name}' AND database = '{DB_CONFIG['database']}' ORDER BY position")
+                with engine.connect() as conn:
+                    df_columns = pd.read_sql(query, conn)
+
             if df_columns.empty:
                 return None, '未找到列信息。'
-            
+
             column_names = df_columns['name'].tolist()
             df = pd.DataFrame(columns=column_names)
             output_buffer = io.BytesIO()
@@ -486,7 +491,9 @@ def perform_upload(table_name, upload_mode, df, uploaded_file, backup_filename):
                     conn.execute(text(f"DELETE FROM {table_name}"))
             
             df.to_sql(table_name, engine, if_exists='append', index=False)
-        
+            mysql_client.to_mysql_data(table_name,upload_mode,df)
+            postgre_client.to_postgresql_data(table_name,upload_mode,df)
+
         beijing_time = datetime.now(BEIJING_TZ)
         operation_type = '覆盖 (Replace)' if upload_mode == 'replace' else '续表 (Append)'
         row_count = len(df)
