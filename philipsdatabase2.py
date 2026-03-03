@@ -51,8 +51,17 @@ TABLES = {
     'ods_asin_sale_goal': {'name': 'Annual Goal ASIN Level'},
     'ods_date_event': {'name': 'ods_date_event'},
     'ods_category_dsp': {'name': 'ods_category_dsp'},
+    'offline_deal_sku': {'name': 'Offline Deal SKU'},
+    'offline_roas_subcategory': {'name': 'Offline ROAS Subcategory'},
+    'offline_target_daily': {'name': 'Offline Target Daily'},
 }
 
+postgre_tables = [
+    'ods_category_dsp',
+    'offline_deal_sku',
+    'offline_roas_subcategory',
+    'offline_target_daily'
+]
 # ==================== 自定义样式 ====================
 def apply_custom_styles():
     st.markdown(f"""
@@ -437,7 +446,7 @@ def export_table(table_name, mode='full', filename=None):
                 return buffer, f'{table_name}_template.xlsx', None, None
 
         engine = get_engine()
-        if 'ods_category_dsp' not in table_name:
+        if table_name not in postgre_tables:
             if not table_exists(engine, table_name, DB_CONFIG['database']):
                 return None, f'表 {table_name} 不存在。'
         
@@ -461,7 +470,7 @@ def export_table(table_name, mode='full', filename=None):
 
         # 全表或备份模式
         query = text(f"SELECT * FROM {table_name}")
-        if 'ods_category_dsp' in table_name:
+        if table_name in postgre_tables:
             with postgre_client.get_engine().begin() as conn:
                 df=pd.read_sql(query, conn)
         else:
@@ -488,7 +497,7 @@ def export_table(table_name, mode='full', filename=None):
 def perform_upload(table_name, upload_mode, df, uploaded_file, backup_filename):
     """执行上传逻辑"""
     try:
-        if 'ods_category_dsp' in table_name:
+        if table_name in postgre_tables:
             postgre_client.to_postgresql_data(table_name, upload_mode, df)
         else:
             engine = get_engine()
@@ -644,7 +653,7 @@ def upload_data(table_name, upload_mode, uploaded_file):
         st.info(f'📋 列名预览: {preview}')
         
         st.info('🧹 正在清洗数据...')
-        if 'ods_category_dsp' not in table_name:
+        if table_name not in postgre_tables:
             df = clean_data(df, table_name, DB_CONFIG['database'])
         
         if df.empty:
@@ -652,7 +661,7 @@ def upload_data(table_name, upload_mode, uploaded_file):
         
         st.info('🔍 正在验证表结构...')
         db_columns= []
-        if 'ods_category_dsp' in table_name:
+        if table_name in postgre_tables:
             db_columns = postgre_client.get_table_columns( table_name, DB_CONFIG['database'])
         else:
             engine = get_engine()

@@ -2,6 +2,9 @@ import psycopg2
 from sqlalchemy import create_engine, text, MetaData, Table
 from urllib.parse import quote_plus
 import pandas as pd
+import logging
+
+logger = logging.getLogger(__name__)
 
 POSTGRES_CONFIG = {
     'host': 'postgre.cluster-cavkqwqmyvuw.us-west-2.rds.amazonaws.com',  # 替换为实际的PostgreSQL主机
@@ -23,6 +26,9 @@ TABLES = {
     'ods_asin_sale_goal': 'ods_asin_sale_goal',
     'ods_date_event': 'ods_date_even',
     'ods_category_dsp': 'ods_category_dsp',
+    'offline_deal_sku': 'offline_deal_sku',
+    'offline_roas_subcategory': 'offline_roas_subcategory',
+    'offline_target_daily': 'offline_target_daily',
 }
 
 def get_engine():
@@ -30,6 +36,120 @@ def get_engine():
     password_encoded = quote_plus(POSTGRES_CONFIG['password'])
     connection_string = f"postgresql+psycopg2://{POSTGRES_CONFIG['user']}:{password_encoded}@{POSTGRES_CONFIG['host']}:{POSTGRES_CONFIG['port']}/{POSTGRES_CONFIG['database']}"
     return create_engine(connection_string)
+
+def get_connection():
+    """获取PostgreSQL数据库连接（原生psycopg2）"""
+    return psycopg2.connect(
+        host=POSTGRES_CONFIG['host'],
+        port=POSTGRES_CONFIG['port'],
+        database=POSTGRES_CONFIG['database'],
+        user=POSTGRES_CONFIG['user'],
+        password=POSTGRES_CONFIG['password'],
+        client_encoding=POSTGRES_CONFIG.get('client_encoding', 'utf8')
+    )
+
+def init_pg_stat_activity_log_table():
+    """初始化 pg_stat_activity_log 表"""
+    create_table_sql = """
+    CREATE TABLE IF NOT EXISTS pg_stat_activity_log (
+        id SERIAL PRIMARY KEY,
+        pid INTEGER,
+        usename VARCHAR(100),
+        application_name VARCHAR(100),
+        client_addr VARCHAR(50),
+        client_port INTEGER,
+        backend_start TIMESTAMP,
+        query_start TIMESTAMP,
+        state VARCHAR(20),
+        query TEXT,
+        wait_event_type VARCHAR(50),
+        wait_event VARCHAR(100),
+        recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    """
+    try:
+        engine = get_engine()
+        with engine.begin() as conn:
+            conn.execute(text(create_table_sql))
+        logger.info("pg_stat_activity_log 表初始化成功")
+    except Exception as e:
+        logger.error(f"初始化 pg_stat_activity_log 表失败: {e}")
+        raise
+
+def get_pg_stat_activity():
+    """获取当前 PostgreSQL 活动进程，排除当前查询自身"""
+    # 获取当前连接的PID用于过滤
+    current_pid = None
+    try:
+        conn = get_connection()
+        current_pid = conn.get_backend_pid()  # 使用正确的API获取后端PID
+        conn.close()
+    except Exception as e:
+        logger.warning(f"获取当前进程PID失败: {e}")
+
+    query = text("""
+        SELECT
+            pid,
+            COALESCE(usename, '') as usename,
+            COALESCE(application_name, '') as application_name,
+            COALESCE(client_addr::text, '') as client_addr,
+            client_port,
+            backend_start,
+            query_start,
+            COALESCE(state, '') as state,
+            COALESCE(query, '') as query,
+            COALESCE(wait_event_type, '') as wait_event_type,
+            COALESCE(wait_event, '') as wait_event
+        FROM pg_stat_activity
+        WHERE state IS NOT NULL AND state != 'idle'
+        ORDER BY query_start
+    """)
+
+    try:
+        engine = get_engine()
+        with engine.begin() as conn:
+            df = pd.read_sql(query, conn)
+
+        # 过滤掉当前查询自身的进程
+        if current_pid is not None:
+            df = df[df['pid'] != current_pid]
+
+        logger.debug(f"获取到 {len(df)} 条活动进程")
+        return df
+    except Exception as e:
+        logger.error(f"查询 pg_stat_activity 失败: {e}")
+        return pd.DataFrame()
+
+def insert_pg_stat_activity_log(df: pd.DataFrame):
+    """将活动进程记录插入到日志表"""
+    if df.empty:
+        return 0
+
+    # 确保列名一致
+    df = df.copy()
+    df.columns = df.columns.str.lower()
+
+    # 填充 None 值为空字符串
+    df = df.fillna('')
+
+    # recorded_at 使用数据库默认值，不在代码中设置
+    if 'recorded_at' in df.columns:
+        df = df.drop(columns=['recorded_at'])
+
+    try:
+        engine = get_engine()
+        with engine.begin() as conn:
+            df.to_sql(
+                'pg_stat_activity_log',
+                conn,
+                if_exists='append',
+                index=False
+            )
+        logger.debug(f"已插入 {len(df)} 条记录到 pg_stat_activity_log")
+        return len(df)
+    except Exception as e:
+        logger.error(f"插入 pg_stat_activity_log 失败: {e}")
+        return 0
 
 def get_table_columns( table_name, database):
     """获取数据库表的列名"""
